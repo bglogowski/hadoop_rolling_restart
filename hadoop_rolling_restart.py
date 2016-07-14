@@ -1027,8 +1027,8 @@ class PhoenixQueryServer(HadoopHost):
 @click.option('--hostname', prompt='Enter Ambari Hostname', help='The hostname of the Ambari server.')
 @click.option('--username', prompt='Enter Admin Username', help='A user account that has admin privileges.')
 @click.option('--password', prompt='Enter Admin Password', help='The password for the admin user.')
-@click.option('--cluster', default='marketo', help='')
-@click.option('--domain', default='marketo.org', help='')
+@click.option('--cluster', default='pdxlab', help='')
+@click.option('--domain', default='pdx.lab.org', help='')
 @click.option('--port', default=8080, help='')
 @click.argument('service')
 def init_script(hostname, username, password, cluster, domain, port, service):
