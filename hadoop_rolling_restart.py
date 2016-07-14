@@ -1,29 +1,31 @@
 #!/usr/bin/env python3.5
 
-import click
 import re
 import json
 import time
 import logging
-import requests
 import socket
+import os.path
+import click
+import requests
+import paramiko
 
 
 # Set constants for various aspects of the restarts
 
-HTTP_RETRY_DELAY=5
-NAMENODE_RESTART_DELAY=120
-SAFEMODE_RETRY_DELAY=30
-DATANODE_RESTART_DELAY=120
-JOURNALNODE_RESTART_DELAY=120
-RESOURCEMANAGER_RESTART_DELAY=120
-NODEMANAGER_RESTART_DELAY=120
-HBASEMASTER_RESTART_DELAY=120
-REGIONSERVER_RESTART_DELAY=120
-OOZIE_RESTART_DELAY=120
-ZOOKEEPER_RESTART_DELAY=120
-SPARKHISTORY_RESTART_DELAY=120
-KAFKA_RESTART_DELAY=900
+HTTP_RETRY_DELAY = 5
+NAMENODE_RESTART_DELAY = 120
+SAFEMODE_RETRY_DELAY = 30
+DATANODE_RESTART_DELAY = 120
+JOURNALNODE_RESTART_DELAY = 120
+RESOURCEMANAGER_RESTART_DELAY = 120
+NODEMANAGER_RESTART_DELAY = 120
+HBASEMASTER_RESTART_DELAY = 120
+REGIONSERVER_RESTART_DELAY = 120
+OOZIE_RESTART_DELAY = 120
+ZOOKEEPER_RESTART_DELAY = 120
+SPARKHISTORY_RESTART_DELAY = 120
+KAFKA_RESTART_DELAY = 900
 
 # Dictionary of services
 # (Only for reference at this time)
@@ -83,7 +85,7 @@ SERVICES = {
 
 # Configure the syslog settings
 
-FORMAT="%(asctime)s %(levelname)s %(message)s"
+FORMAT = "%(asctime)s %(levelname)s %(message)s"
 
 logging.basicConfig(format=FORMAT, level=logging.DEBUG)
 logging.getLogger("requests").setLevel(logging.WARNING)
@@ -95,78 +97,106 @@ class Ambari(object):
     Ambari Server Object
     """
     def __init__(self, name, username, password, cluster, domain, port):
-        logging.debug("Initializing Ambari server: {0}...".format(name))
-        self.url = 'http://' + name + '.' + domain + ':' + str(port) + '/api/v1/clusters/' + cluster
+        """
+        """
         self.name = name
+        self.domain = domain
+        self.fqdn = name + '.' + domain
+
+        logging.debug('Initializing Ambari server: %s', self.fqdn)
+
+        self.port = port
+        self.cluster = cluster
+
+        self.url = 'http://{0}:{1}/api/v1/clusters/{2}'.format(self.fqdn, self.port, self.cluster)
+
         self.username = username
         self.password = password
-        self.domain = domain
-        self.cluster = cluster
-        self.port = port
-        self.headers = { 'X-Requested-By' : 'hadoop.py' }
+
+        self.headers = {'X-Requested-By': 'hadoop.py'}
+
         self.__set_hosts()
-        logging.debug("Initialization for Ambari for {0} complete.".format(name))
+
+        logging.debug('Initialization of Ambari complete.')
+
 
     def get_items(self, uri):
+        """
+        """
         try:
-            r = requests.get(self.url + uri,
-                             auth=(self.username, self.password),
-                             headers=self.headers
-                            ).content
-            return json.loads(r.decode('utf8'))['items']
+            req = requests.get(
+                self.url + uri,
+                auth=(
+                    self.username,
+                    self.password
+                ),
+                headers=self.headers
+            ).content
+            return json.loads(req.decode('utf8'))['items']
         except:
-            logging.warning('JSON Data for {0} not returned from {1}, Retrying...'.format(self.name, self.url + uri))
+            logging.warninging('JSON data not returned from %s, Retrying...', self.url + uri)
             time.sleep(HTTP_RETRY_DELAY)
             return self.get_items(uri)
 
     def execute(self, url, payload):
-        logging.debug('Attempting HTTP PUT to {0} with payload: {2} ...'.format(url, self.headers, payload))
+        """
+        """
+        logging.debug('Attempting HTTP PUT to %s with payload: %s ...', url, payload)
         try:
-            r = requests.put(url,
-                             auth=(self.username, self.password),
-                             headers=self.headers,
-                             data=json.dumps(payload)
-                            )
-            if r.status_code == 202:
+            req = requests.put(
+                url,
+                auth=(
+                    self.username,
+                    self.password
+                ),
+                headers=self.headers,
+                data=json.dumps(payload)
+            )
+            if req.status_code == 202:
                 return 'OK'
             else:
-                logging.error('HTTP PUT to {0} returned {1} with contents: {2}'.format(url, r.status_code, json.loads(r.content.decode('utf8'))))
+                logging.error('HTTP PUT to %s returned: %s', url, json.loads(req.content.decode('utf8')))
                 time.sleep(HTTP_RETRY_DELAY)
                 return self.execute(url, payload)
         except:
-            logging.warning('JSON Data for {0} not returned from {1}, Retrying...'.format(self.name, url))
+            logging.warninging('JSON data not returned from %s, Retrying...', url)
             time.sleep(HTTP_RETRY_DELAY)
             return self.execute(url, payload)
 
 
     def queue(self, url, payload):
-        logging.debug('Attempting HTTP POST to {0} with payload: {2} ...'.format(url, self.headers, payload))
+        """
+        """
+        logging.debug('Attempting HTTP POST to %s with payload: %s ...', url, payload)
         try:
-            r = requests.post(url,
-                             auth=(self.username, self.password),
-                             headers=self.headers,
-                             data=json.dumps(payload)
-                            )
-            if r.status_code == 202:
+            req = requests.post(
+                url,
+                auth=(
+                    self.username,
+                    self.password
+                ),
+                headers=self.headers,
+                data=json.dumps(payload)
+            )
+            if req.status_code == 202:
                 return 'OK'
             else:
-                logging.error('HTTP POST to {0} returned {1} with contents: {2}'.format(url, r.status_code, json.loads(r.content.decode('utf8'))))
+                logging.error('HTTP POST to %s returned contents: %s', url, json.loads(req.content.decode('utf8')))
                 time.sleep(HTTP_RETRY_DELAY)
                 return self.queue(url, payload)
         except:
-            logging.warning('JSON Data for {0} not returned from {1}, Retrying...'.format(self.name, url))
+            logging.warninging('JSON data not returned from %s, Retrying...', url)
             time.sleep(HTTP_RETRY_DELAY)
             return self.queue(url, payload)
 
-
-
-
     def __set_hosts(self):
+        """
+        """
         hosts = []
         uri = '/hosts'
         for item in self.get_items(uri):
             name = item['Hosts']['host_name'].split('.')[0]
-            logging.debug("=> Found Host: {0}".format(name))
+            logging.debug('=> Found Host: %s', name)
             domain = '.'.join(item['Hosts']['host_name'].split('.')[1:])
             hosts.append(Host(name, domain, self))
         self.hosts = hosts
@@ -179,120 +209,91 @@ class Host(object):
     def __init__(self, name, domain, ambari):
         """
         """
-        logging.debug("Initializing Host: {0}...".format(name))
-
         self.name = name
         self.domain = domain
         self.fqdn = name + '.' + domain
+        logging.debug('Initializing Host: %s...', self.fqdn)
+
         self.cluster = ambari.cluster
         self.ambari = ambari
 
         self.uri = '/hosts/' + self.fqdn
         self.url = self.ambari.url + self.uri
 
-        self.namenode = False
-        self.journalnode = False
-        self.datanode = False
-        self.zkfc = False
-        self.nfs_gateway = False
-        self.hbasemaster = False
-        self.regionserver = False
-        self.phoenix = False
-        self.resourcemanager = False
-        self.nodemanager = False
-        self.apptimeline = False
-        self.zookeeper = False
-        self.oozie = False
-        self.sparkhistory = False
-        self.kafka = False
-
         self.services = []
-        self.__set_services()
+        self.__set_properties()
 
-        logging.debug("Initialization for Host {0} complete.".format(name))
+        logging.debug('Initialization for Host complete.')
 
+    def ssh_with_password(self, username, password, command):
+        """
+        """
+        ssh = paramiko.SSHClient()
+        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        try:
+            ssh.connect(self.fqdn, username=username, password=password)
+            stdin, stdout, stderr = ssh.exec_command(command)
+            logging.debug('SSH to %s succeeded.', self.fqdn)
+            return True
+        except:
+            logging.error('SSH to %s failed with command: %s', self.fqdn, command)
+            return False
 
-    def __set_services(self):
+    def ssh_with_key(self, private_key, command):
+        """
+        """
+        if os.path.isfile(private_key):
+            key = paramiko.RSAKey.from_private_key_file(private_key)
+            ssh = paramiko.SSHClient()
+            ssh.load_system_host_keys()
+            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            try:
+                ssh.connect(self.fqdn, pkey=key)
+                stdin, stdout, stderr = ssh.exec_command(command)
+                logging.debug('SSH to %s succeeded.', self.fqdn)
+                return True
+            except:
+                logging.error('SSH to %s failed with command: %s', self.fqdn, command)
+                return False
+        else:
+            logging.error('SSH private key %s not found.', private_key)
+            return False
+
+    def __set_properties(self):
         """
         """
         uri = self.uri + '/host_components'
         for component in self.ambari.get_items(uri):
-            service= component['HostRoles']['component_name']
+            service = component['HostRoles']['component_name']
             self.services.append(service)
 
             # Anything can run on any server, check them all!
 
+            logging.debug('Found %s on Host %s.', service, self.fqdn)
 
             # HDFS services
 
-            if service == 'NAMENODE':
-                logging.debug("Found HDFS NameNode on Host {0}...".format(self.name))
-                self.namenode = True
-
-            if service == 'JOURNALNODE':
-                logging.debug("Found HDFS JournalNode on Host {0}...".format(self.name))
-                self.journalnode = True
-
-            if service == 'DATANODE':
-                logging.debug("Found HDFS DataNode on Host {0}...".format(self.name))
-                self.datanode = True
-
-            if service == 'ZKFC':
-                logging.debug("Found HDFS ZkFailoverController on Host {0}...".format(self.name))
-                self.zkfc = True
-
-            if service == 'NFS_GATEWAY':
-                logging.debug("Found HDFS NFS Gateway on Host {0}...".format(self.name))
-                self.nfs_gateway = True
-
+            self.namenode = True if service == 'NAMENODE' else False
+            self.journalnode = True if service == 'JOURNALNODE' else False
+            self.datanode = True if service == 'DATANODE' else False
+            self.zkfc = True if service == 'ZKFC' else False
+            self.nfs_gateway = True if service == 'NFS_GATEWAY' else False
 
             # HBase services
-
-            if service == 'HBASE_MASTER':
-                logging.debug("Found HBase Master on Host {0}...".format(self.name))
-                self.hbasemaster = True
-
-            if service == 'HBASE_REGIONSERVER':
-                logging.debug("Found HBase Region Server on Host {0}...".format(self.name))
-                self.regionserver = True
-
-            if service == 'PHOENIX_QUERY_SERVER':
-                logging.debug("Found HBase Phoenix Query Server on Host {0}...".format(self.name))
-                self.phoenix = True
-
+            self.hbasemaster = True if service == 'HBASE_MASTER' else False
+            self.regionserver = True if service == 'HBASE_REGIONSERVER' else False
+            self.phoenix = True if service == 'PHOENIX_QUERY_SERVER' else False
 
             # YARN Services
-
-            if service == 'RESOURCEMANAGER':
-                logging.debug("Found YARN Resource Manager on Host {0}...".format(self.name))
-                self.resourcemanager = True
-
-            if service == 'NODEMANAGER':
-                logging.debug("Found YARN Node Manager on Host {0}...".format(self.name))
-                self.nodemanager = True
-
-            if service == 'APP_TIMELINE_SERVER':
-                logging.debug("Found YARN App Timeline Server on Host {0}...".format(self.name))
-                self.apptimeline = True
-
+            self.resourcemanager = True if service == 'RESOURCEMANAGER' else False
+            self.nodemanager = True if service == 'NODEMANAGER' else False
+            self.apptimeline = True if service == 'APP_TIMELINE_SERVER' else False
 
             # Other Hadoop services
-
-            if service == 'ZOOKEEPER':
-                logging.debug("Found ZooKeeper on Host {0}...".format(self.name))
-                self.zookeeper = True
-
-            if service == 'OOZIE_SERVER':
-                logging.debug("Found Oozie on Host {0}...".format(self.name))
-                self.oozie = True
-
-            if service == 'SPARK_JOBHISTORYSERVER':
-                logging.debug("Found Spark History on Host {0}...".format(self.name))
-                self.sparkhistory = True
-
-            if service == 'KAFKA':
-                logging.debug("Found Kafka on Host {0}...".format(self.name))
-                self.kafka = True
+            self.zookeeper = True if service == 'ZOOKEEPER_SERVER' else False
+            self.oozie = True if service == 'OOZIE_SERVER' else False
+            self.sparkhistory = True if service == 'SPARK_JOBHISTORYSERVER' else False
+            self.kafka = True if service == 'KAFKA' else False
 
 
 class HadoopHost(object):
@@ -302,16 +303,22 @@ class HadoopHost(object):
     def __init__(self, host, port):
         """
         """
-        try:
-            self.description
-        except NameError:
+        # try:
+        #    self.description
+        #except NameError:
+        #    self.description = "Service"
+
+        if not 'self.description' in locals() or 'self.description' in globals():
             self.description = "Service"
+
         self.name = host.name
         self.domain = host.domain
         self.fqdn = host.name + '.' + host.domain
         self.port = port
         self.ambari = host.ambari
-        self.START = {
+        self.ambari_url = self.ambari.url
+
+        self.start_command = {
             "RequestInfo": {
                 "context": "Start {0} via REST".format(self.description)
             },
@@ -321,7 +328,8 @@ class HadoopHost(object):
                 }
             }
         }
-        self.STOP = {
+
+        self.stop_command = {
             "RequestInfo": {
                 "context": "Stop {0} via REST".format(self.description)
             },
@@ -334,46 +342,52 @@ class HadoopHost(object):
 
     def stop(self):
         """
+        Public method to stop the service
         """
-        logging.info("Stopping {0} on {1}...".format(self.description, self.fqdn))
-        return self.ambari.execute(self.ambari_url, self.STOP)
+        logging.info('Stopping %s on %s...', self.description, self.fqdn)
+        return self.ambari.execute(self.ambari_url, self.stop_command)
 
     def start(self):
         """
+        Public method to start the service
         """
-        logging.info("Starting {0} on {1}...".format(self.description, self.fqdn))
-        return self.ambari.execute(self.ambari_url, self.START)
+        logging.info('Starting %s on %s...', self.description, self.fqdn)
+        return self.ambari.execute(self.ambari_url, self.start_command)
 
     def tcp_port_open(self):
         """
+        Public method to check if a TCP port is open and warn if it is not
         """
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         result = sock.connect_ex((self.fqdn, self.port))
 
         if result == 0:
-            logging.debug("TCP port {0} for {1} on {2} is open.".format(self.port, self.description, self.fqdn))
+            logging.debug('TCP port %s:%s is open.', self.fqdn, str(self.port))
             return True
         else:
-            logging.warn("TCP port on {0} for {1} on {2} is closed.".format(self.port, self.description, self.fqdn))
+            logging.warning('TCP port %s:%s is closed.', self.fqdn, str(self.port))
             return False
 
     def tcp_port_closed(self):
         """
+        Public method to check if a TCP port is closed
         """
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         result = sock.connect_ex((self.fqdn, self.port))
 
         if result == 0:
-            logging.debug("TCP port {0} for {1} on {2} is open.".format(self.port, self.description, self.fqdn))
+            logging.debug('TCP port %s:%s is open.', self.fqdn, str(self.port))
             return False
         else:
-            logging.debug("TCP port on {0} for {1} on {2} is closed.".format(self.port, self.description, self.fqdn))
+            logging.debug('TCP port %s:%s is closed.', self.fqdn, str(self.port))
             return True
 
 
     def is_healthy(self):
         """
-        Public method to query the Health of the Service
+        Public method to query the health of the service
+            - Defaults to a TCP port check
+            - Should be overridden if there are more sophisticated checks available
         """
         return self.tcp_port_open()
 
@@ -393,7 +407,7 @@ class HadoopService(object):
         request_uri = '/requests/'
         self.ambari_url = self.ambari.url + request_uri
 
-        self.REFRESH_CONFIGS = {
+        self.refresh_configs = {
             "RequestInfo": {
                 "command": "RESTART",
                 "context": "Restart {0} Client on {1}".format(self.service, self.host.fqdn),
@@ -411,11 +425,35 @@ class HadoopService(object):
             ]
         }
 
+        self.restart_command = {
+            "RequestInfo": {
+                "command": "RESTART",
+                "context": "Restart {0} on {1}".format(self.service, self.host.fqdn),
+                "operation_level":{
+                    "level": "HOST",
+                    "cluster_name": "{0}".format(self.host.cluster)
+                    }
+                },
+            "Requests/resource_filters": [
+                {
+                    "service_name": "{0}".format(self.service),
+                    "component_name": "{0}".format(self.service),
+                    "hosts": "{0}".format(self.host.fqdn)
+                }
+            ]
+        }
+
     def refresh(self):
         """
         """
-        logging.info("Refreshing client configs for {0} on {1}...".format(self.service, self.host.fqdn))
-        return self.ambari.queue(self.ambari_url, self.REFRESH_CONFIGS)
+        logging.info('Refreshing client configs for %s on %s...', self.service, self.host.fqdn)
+        return self.ambari.queue(self.ambari_url, self.refresh_configs)
+
+    def restart(self):
+        """
+        """
+        logging.info('Restarting %s on %s...', self.service, self.host.fqdn)
+        return self.ambari.queue(self.ambari_url, self.restart_command)
 
 
 
@@ -439,7 +477,7 @@ class JmxHadoopHost(HadoopHost):
         try:
             return requests.get(url).content
         except:
-            logging.warning('JMX Data not returned from {1}, Retrying...'.format(url))
+            logging.warninging('JMX Data not returned from {1}, Retrying...'.format(url))
             time.sleep(HTTP_RETRY_DELAY)
             return self.get_jmx(url)
 
@@ -455,16 +493,30 @@ class JmxHadoopHost(HadoopHost):
         """
         return self.get_beans(self.get_jmx(jmx_url))
 
+    def __set_properties(self):
+        """
+        Stub method
+        """
+        pass
+
+    def refresh(self, jmx_dict):
+        """
+        Public method to set variables based on the latest JMX data
+        """
+        self.jmx_dict = self.get_jmx_dict(self.jmx_url)
+        self.__set_properties(self.jmx_dict)
+
+
 
 class NameNode(JmxHadoopHost):
     """
     HDFS NameNode host
     """
-    def __init__(self, host, port = 50070):
+    def __init__(self, host, port=50070):
         """
         """
-        self.description = "HDFS NameNode"
-        logging.debug("Initializing {0}: {1}...".format(self.description, host.name))
+        self.description = 'HDFS NameNode'
+        logging.debug('Initializing %s: %s...', self.description, host.fqdn)
         super(NameNode, self).__init__(host, port)
 
         namenode_uri = '/hosts/' + self.fqdn + '/host_components/NAMENODE'
@@ -472,16 +524,10 @@ class NameNode(JmxHadoopHost):
 
         self.state = self.__get_state(self.jmx_dict)
         self.safemode = self.__get_safemode(self.jmx_dict)
-        self.__set_status(self.jmx_dict)
+        self.livenodes = []
+        self.__set_properties(self.jmx_dict)
 
-        logging.debug("Initialization of {0} complete.".format(self.description))
-
-
-    def is_healthy(self):
-        """
-        Public method to query the Health of the NameNode
-        """
-        return self.get_safemode()
+        logging.debug('Initialization of %s complete.', self.description)
 
 
     def get_state(self):
@@ -502,7 +548,7 @@ class NameNode(JmxHadoopHost):
             for key in bean.keys():
                 if key == 'name':
                     if bean[key] == 'Hadoop:service=NameNode,name=NameNodeStatus':
-                        logging.debug("NameNode: state = {}".format(bean['State'].upper()))
+                        logging.debug('NameNode: state = %s', bean['State'].upper())
                         return bean['State']
 
 
@@ -531,8 +577,10 @@ class NameNode(JmxHadoopHost):
                             logging.debug("NameNode: safemode = False")
                             return False
 
+
     def get_livenodes(self):
         """
+        Public method to get a list of LiveNodes from JMX
         """
         livenodes = []
         deadnodes = []
@@ -545,13 +593,14 @@ class NameNode(JmxHadoopHost):
                             if re.match('In Service', json.loads(bean['LiveNodes'])[node]['adminState']):
                                 livenodes.append(name)
                             else:
-                                logging.warning('Found Dead Datanode: {0}'.format(name))
+                                logging.warninging('Found Dead Datanode: {0}'.format(name))
                                 deadnodes.append(name)
         self.livenodes = sorted(livenodes)
-        logging.debug("NameNode: livenodes = {0}".format(self.livenodes))
+        logging.debug('NameNode: livenodes = %s', self.livenodes)
         return self.livenodes
 
-    def __set_status(self, jmx_dict):
+
+    def __set_properties(self, jmx_dict):
         """
         Private method to set variables based on JMX data
         """
@@ -564,43 +613,26 @@ class NameNode(JmxHadoopHost):
                             self.security_enabled = True
                         else:
                             self.security_enabled = False
-                        logging.debug("NameNode: security_enabled = {0}".format(self.security_enabled))
 
                     if bean[key] == 'Hadoop:service=NameNode,name=StartupProgress':
                         self.startup_percent_complete = float(bean['PercentComplete'])
-                        logging.debug("NameNode: startup_percent_complete = {0}".format(self.startup_percent_complete))
                         self.loading_edits_percent_complete = float(bean['LoadingEditsPercentComplete'])
-                        logging.debug("NameNode: loading_edits_percent_complete = {0}".format(self.loading_edits_percent_complete))
 
                     if bean[key] == 'Hadoop:service=NameNode,name=FSNamesystem':
                         self.missing_blocks = int(bean['MissingBlocks'])
-                        logging.debug("NameNode: missing_blocks = {0}".format(self.missing_blocks))
                         self.missing_repl_one_blocks = int(bean['MissingReplOneBlocks'])
-                        logging.debug("NameNode: missing_repl_one_blocks = {0}".format(self.missing_repl_one_blocks))
                         self.expired_heartbeats = int(bean['ExpiredHeartbeats'])
-                        logging.debug("NameNode: expired_heartbeats = {0}".format(self.expired_heartbeats))
                         self.lock_queue_length = int(bean['LockQueueLength'])
-                        logging.debug("NameNode: lock_queue_length = {0}".format(self.lock_queue_length))
                         self.num_active_clients = int(bean['NumActiveClients'])
-                        logging.debug("NameNode: num_active_clients = {0}".format(self.num_active_clients))
                         self.pending_replication_blocks = int(bean['PendingReplicationBlocks'])
-                        logging.debug("NameNode: pending_replication_blocks = {0}".format(self.pending_replication_blocks))
                         self.under_replicated_blocks = int(bean['UnderReplicatedBlocks'])
-                        logging.debug("NameNode: under_replicated_blocks = {0}".format(self.under_replicated_blocks))
                         self.corrupt_blocks = int(bean['CorruptBlocks'])
-                        logging.debug("NameNode: corrupt_blocks = {0}".format(self.corrupt_blocks))
                         self.scheduled_replication_blocks = int(bean['ScheduledReplicationBlocks'])
-                        logging.debug("NameNode: scheduled_replication_blocks = {0}".format(self.scheduled_replication_blocks))
                         self.pending_deletion_blocks = int(bean['PendingDeletionBlocks'])
-                        logging.debug("NameNode: pending_deletion_blocks = {0}".format(self.pending_deletion_blocks))
                         self.excess_blocks = int(bean['ExcessBlocks'])
-                        logging.debug("NameNode: excess_blocks = {0}".format(self.excess_blocks))
                         self.postponed_misreplicated_blocks = int(bean['PostponedMisreplicatedBlocks'])
-                        logging.debug("NameNode: postponed_misreplicated_blocks = {0}".format(self.postponed_misreplicated_blocks))
                         self.pending_datanode_msg_count = int(bean['PendingDataNodeMessageCount'])
-                        logging.debug("NameNode: pending_datanode_msg_count = {0}".format(self.pending_datanode_msg_count))
                         self.stale_datanodes = int(bean['StaleDataNodes'])
-                        logging.debug("NameNode: stale_datanodes = {0}".format(self.stale_datanodes))
 
                     if bean[key] == 'Hadoop:service=NameNode,name=NameNodeInfo':
                         self.threads = int(bean['Threads'])
@@ -608,12 +640,15 @@ class NameNode(JmxHadoopHost):
                             self.finalized = True
                         else:
                             self.finalized = False
-                        logging.debug("NameNode: finalized = {0}".format(self.finalized))
                         self.total_blocks = int(bean['TotalBlocks'])
-                        logging.debug("NameNode: total_blocks = {0}".format(self.total_blocks))
                         self.total_files = int(bean['TotalFiles'])
-                        logging.debug("NameNode: total_files = {0}".format(self.total_files))
 
+
+    def is_healthy(self):
+        """
+        Public method to query the Health of the NameNode
+        """
+        return self.get_safemode()
 
 
 class ZkFailoverController(HadoopHost):
@@ -621,17 +656,17 @@ class ZkFailoverController(HadoopHost):
     HDFS ZooKeeper Failover Controller hosts which coexist on
     NameNode servers that support HA
     """
-    def __init__(self, host, port = 8019):
+    def __init__(self, host, port=8019):
         """
         """
         self.description = "HDFS Failover Controller"
-        logging.debug("Initializing {0}: {1}...".format(self.description, host.name))
+        logging.debug('Initializing %s: %s...', self.description, host.fqdn)
         super(ZkFailoverController, self).__init__(host, port)
 
         zkfc_uri = '/hosts/' + self.fqdn + '/host_components/ZKFC'
         self.ambari_url = self.ambari.url + zkfc_uri
 
-        logging.debug("Initialization of {0} complete.".format(self.description))
+        logging.debug('Initialization of %s complete.', self.description)
 
 
 
@@ -639,37 +674,21 @@ class DataNode(JmxHadoopHost):
     """
     HDFS DataNode host
     """
-    def __init__(self, host, port = 50075):
+    def __init__(self, host, port=50075):
         """
         """
         self.description = "HDFS DataNode"
-        logging.debug("Initializing {0}: {1}...".format(self.description, host.name))
+        logging.debug('Initializing %s: %s...', self.description, host.fqdn)
         super(DataNode, self).__init__(host, port)
 
         datanode_uri = '/hosts/' + self.fqdn + '/host_components/DATANODE'
         self.ambari_url = self.ambari.url + datanode_uri
-        self.__set_status(self.jmx_dict)
+        self.__set_properties(self.jmx_dict)
 
-        logging.debug("Initialization of {0} complete.".format(self.description))
-
-
-    def is_healthy(self):
-        """
-        Public method to query the Health of the DataNode
-        """
-        self.get_status()
-        return self.failed_volumes == 0 and len(self.namenodes) > 1
+        logging.debug('Initialization of %s complete.', self.description)
 
 
-    def get_status(self, jmx_dict):
-        """
-        Public method to set variables based on JMX data
-        """
-        self.jmx_dict = self.get_jmx_dict(self.jmx_url)
-        self.__set_status(self.jmx_dict)
-
-
-    def __set_status(self, jmx_dict):
+    def __set_properties(self, jmx_dict):
         """
         Private method to set variables based on JMX data
         """
@@ -678,104 +697,114 @@ class DataNode(JmxHadoopHost):
                 if key == 'name':
                     if bean[key] == 'Hadoop:service=DataNode,name=FSDatasetState':
                         self.failed_volumes = int(bean['NumFailedVolumes'])
-                        logging.debug("DataNode: failed_volumes = {0}".format(self.failed_volumes))
+                        logging.debug('%s: failed_volumes = %i', self.__class__.__name__, self.failed_volumes)
                         self.capacity = int(bean['Capacity'])
-                        logging.debug("DataNode: capacity = {0}".format(self.capacity))
+                        logging.debug('%s: capacity = %i', self.__class__.__name__, self.capacity)
                         self.used = int(bean['DfsUsed'])
-                        logging.debug("DataNode: used = {0}".format(self.used))
+                        logging.debug('%s: used = %i', self.__class__.__name__, self.used)
                         self.remaining = int(bean['Remaining'])
-                        logging.debug("DataNode: remaining = {0}".format(self.remaining))
+                        logging.debug('%s: remaining = %i', self.__class__.__name__, self.remaining)
                         self.lost_capacity = int(bean['EstimatedCapacityLostTotal'])
-                        logging.debug("DataNode: lost_capacity = {0}".format(self.lost_capacity))
+                        logging.debug('%s: lost_capacity = %i', self.__class__.__name__, self.lost_capacity)
 
                     if bean[key] == 'Hadoop:service=DataNode,name=DataNodeInfo':
                         self.namenodes = []
-                        for nn in json.loads(bean['NamenodeAddresses']).keys():
-                            self.namenodes.append(nn.split('.')[0])
-                        logging.debug("DataNode: namenodes = {0}".format(self.namenodes))
+                        for namenode in json.loads(bean['NamenodeAddresses']).keys():
+                            self.namenodes.append(namenode.split('.')[0])
 
                     if bean[key] == 'Hadoop:service=DataNode,name=JvmMetrics':
                         self.blocked_threads = int(bean['ThreadsBlocked'])
-                        logging.debug("DataNode: blocked_threads = {0}".format(self.blocked_threads))
+                        logging.debug('%s: blocked_threads = %i', self.__class__.__name__, self.blocked_threads)
 
+
+    def is_healthy(self):
+        """
+        Public method to query the Health of the DataNode
+        """
+        self.refresh()
+        return self.failed_volumes == 0 and len(self.namenodes) > 1 
 
 
 class JournalNode(JmxHadoopHost):
     """
     HDFS Journal Node
     """
-    def __init__(self, host, port = 8480):
+    def __init__(self, host, port=8480):
         """
         """
         self.description = "HDFS Journal"
-        logging.debug("Initializing {0}: {1}...".format(self.description, host.name))
+        logging.debug('Initializing %s: %s...', self.description, host.fqdn)
         super(JournalNode, self).__init__(host, port)
 
         journalnode_uri = '/hosts/' + self.fqdn + '/host_components/JOURNALNODE'
         self.ambari_url = self.ambari.url + journalnode_uri
 
-        logging.debug("Initialization of {0} complete.".format(self.description))
+        logging.debug('Initialization of %s complete.', self.description)
 
 
 class NfsGateway(JmxHadoopHost):
     """
     NFS Gateway for HDFS
     """
-    def __init__(self, host, port = 50079):
+    def __init__(self, host, port=50079):
         """
         """
         self.description = "NFS Gateway"
-        logging.debug("Initializing {0}: {1}...".format(self.description, host.name))
+        logging.debug('Initializing %s: %s...', self.description, host.fqdn)
         super(NfsGateway, self).__init__(host, port)
 
         nfsgateway_uri = '/hosts/' + self.fqdn + '/host_components/NFS_GATEWAY'
         self.ambari_url = self.ambari.url + nfsgateway_uri
 
-        logging.debug("Initialization of {0} complete.".format(self.description))
+        logging.debug('Initialization of %s complete.', self.description)
 
 
 class ResourceManager(JmxHadoopHost):
     """
     YARN ResourceManager
     """
-    def __init__(self, host, port = 8088):
+    def __init__(self, host, port=8088):
         """
         """
         self.description = "YARN ResourceManager"
-        logging.debug("Initializing {0}: {1}...".format(self.description, host.name))
+        logging.debug('Initializing %s: %s...', self.description, host.fqdn)
         super(ResourceManager, self).__init__(host, port)
 
 
         resourcemanager_uri = '/hosts/' + self.fqdn + '/host_components/RESOURCEMANAGER'
         self.ambari_url = self.ambari.url + resourcemanager_uri
-        self.__set_status(self.jmx_dict)
+        self.__set_properties(self.jmx_dict)
         self.get_state()
         self.get_livenodes()
 
-        logging.debug("Initialization of {0} complete.".format(self.description))
+        logging.debug('Initialization of %s complete.', self.description)
 
     def get_state(self):
+        """
+        Public method to query the ResourceManager if it is in ACTIVE or STANDBY mode.
+        """
         url = 'http://{0}:{1}/cluster'.format(self.fqdn, self.port)
         try:
-            r = requests.get(url, allow_redirects=False)
-            if r.status_code == 302 or r.status_code == 307:
+            req = requests.get(url, allow_redirects=False)
+            if req.status_code == 302 or req.status_code == 307:
                 self.state = 'standby'
                 return self.state
-            elif r.status_code == 200:
+            elif req.status_code == 200:
                 self.state = 'active'
                 return self.state
             else:
-                logging.error('HTTP GET to {0} returned {1} with contents: {2}'.format(url, r.status_code, r.content))
+                logging.error('HTTP GET to %s returned contents: %s', url, req.content)
                 time.sleep(HTTP_RETRY_DELAY)
                 return self.get_state()
         except:
-            logging.warning('HTML Data for {0} not returned from {1}, Retrying...'.format(self.fqdn, url))
+            logging.warninging('HTML data not returned from %s, Retrying...', url)
             time.sleep(HTTP_RETRY_DELAY)
             return self.get_state()
 
 
     def get_livenodes(self):
         """
+        Public method to get a list of LiveNodes from JMX
         """
         livenodes = []
         for bean in self.jmx_dict:
@@ -783,17 +812,13 @@ class ResourceManager(JmxHadoopHost):
                 if key == 'name':
                     if bean[key] == 'Hadoop:service=ResourceManager,name=RMNMInfo':
                         for node in json.loads(bean['LiveNodeManagers']):
-                            # list of dicts?
-                            # For a dict, Key is HostName
                             name = node['HostName'].split('.')[0]
                             livenodes.append(name)
         self.livenodes = sorted(livenodes)
-        logging.debug("ResourceManager: livenodes = {0}".format(self.livenodes))
+        logging.debug('%s: livenodes = %s', self.__class__.__name__, self.livenodes)
         return self.livenodes
 
-
-
-    def __set_status(self, jmx_dict):
+    def __set_properties(self, jmx_dict):
         """
         Private method to set variables based on JMX data
         """
@@ -802,26 +827,31 @@ class ResourceManager(JmxHadoopHost):
                 if key == 'name':
                     if bean[key] == 'Hadoop:service=ResourceManager,name=MetricsSystem,sub=Stats':
                         self.num_active_sources = int(bean['NumActiveSources'])
-                        logging.debug("ResourceManager: num_active_sources = {0}".format(self.num_active_sources))
+                        logging.debug('%s: num_active_sources = %i', self.__class__.__name__, self.num_active_sources)
                         self.num_all_sources = int(bean['NumAllSources'])
-                        logging.debug("ResourceManager: num_all_sources = {0}".format(self.num_all_sources))
+                        logging.debug('%s: num_all_sources = %i', self.__class__.__name__, self.num_all_sources)
                         self.num_active_sinks = int(bean['NumActiveSinks'])
-                        logging.debug("ResourceManager: num_active_sinks = {0}".format(self.num_active_sinks))
+                        logging.debug('%s: num_active_sinks = %i', self.__class__.__name__, self.num_active_sinks)
 
                     if bean[key] == 'Hadoop:service=ResourceManager,name=ClusterMetrics':
                         self.num_active_nodemanagers = int(bean['NumActiveNMs'])
-                        logging.debug("ResourceManager: num_active_nodemanagers = {0}".format(self.num_active_nodemanagers))
+                        logging.debug('%s: num_active_nodemanagers = %i', self.__class__.__name__, self.num_active_nodemanagers)
                         self.num_decommissioned_nodemanagers = int(bean['NumDecommissionedNMs'])
-                        logging.debug("ResourceManager: num_decommissioned_nodemanagers = {0}".format(self.num_decommissioned_nodemanagers))
+                        logging.debug('%s: num_decommissioned_nodemanagers = %i', self.__class__.__name__, self.num_decommissioned_nodemanagers)
                         self.num_lost_nodemanagers = int(bean['NumLostNMs'])
-                        logging.debug("ResourceManager: num_lost_nodemanagers = {0}".format(self.num_lost_nodemanagers))
+                        logging.debug('%s: num_lost_nodemanagers = %i', self.__class__.__name__, self.num_lost_nodemanagers)
                         self.num_unhealthy_nodemanagers = int(bean['NumUnhealthyNMs'])
-                        logging.debug("ResourceManager: num_unhealthy_nodemanagers = {0}".format(self.num_unhealthy_nodemanagers))
+                        logging.debug('%s: num_unhealthy_nodemanagers = %i', self.__class__.__name__, self.num_unhealthy_nodemanagers)
                         self.num_rebooted_nodemanagers = int(bean['NumRebootedNMs'])
-                        logging.debug("ResourceManager: num_rebooted_nodemanagers = {0}".format(self.num_rebooted_nodemanagers))
+                        logging.debug('%s: num_rebooted_nodemanagers = %i', self.__class__.__name__, self.num_rebooted_nodemanagers)
 
 
-
+    def is_healthy(self):
+        """
+        Public method to query the Health of the ResourceManager
+        """
+        self.refresh()
+        return self.num_unhealthy_nodemanagers == 0 and self.num_lost_nodemanagers == 0
 
 
 
@@ -829,21 +859,20 @@ class NodeManager(JmxHadoopHost):
     """
     YARN NodeManger
     """
-    def __init__(self, host, port = 8042):
+    def __init__(self, host, port=8042):
         """
         """
         self.description = "YARN NodeManger"
-        logging.debug("Initializing {0}: {1}...".format(self.description, host.name))
+        logging.debug('Initializing %s: %s...', self.description, host.fqdn)
         super(NodeManager, self).__init__(host, port)
 
         nodemanager_uri = '/hosts/' + self.fqdn + '/host_components/NODEMANAGER'
         self.ambari_url = self.ambari.url + nodemanager_uri
-        self.__set_status(self.jmx_dict)
+        self.__set_properties(self.jmx_dict)
 
-        logging.debug("Initialization of {0} complete.".format(self.description))
+        logging.debug('Initialization of %s complete.', self.description)
 
-
-    def __set_status(self, jmx_dict):
+    def __set_properties(self, jmx_dict):
         """
         Private method to set variables based on JMX data
         """
@@ -852,70 +881,68 @@ class NodeManager(JmxHadoopHost):
                 if key == 'name':
                     if bean[key] == 'Hadoop:service=NodeManager,name=NodeManagerMetrics':
                         self.containers_initing = int(bean['ContainersIniting'])
-                        logging.debug("NodeManager: containers_initing = {0}".format(self.containers_initing))
+                        logging.debug('%s: containers_initing = %i', self.__class__.__name__, self.containers_initing)
                         self.containers_running = int(bean['ContainersRunning'])
-                        logging.debug("NodeManager: containers_running = {0}".format(self.containers_running))
+                        logging.debug('%s: containers_running = %i', self.__class__.__name__, self.containers_running)
                         self.bad_local_dirs = int(bean['BadLocalDirs'])
-                        logging.debug("NodeManager: bad_local_dirs = {0}".format(self.bad_local_dirs))
+                        logging.debug('%s: bad_local_dirs = %i', self.__class__.__name__, self.bad_local_dirs)
                         self.bad_log_dirs = int(bean['BadLogDirs'])
-                        logging.debug("NodeManager: bad_log_dirs = {0}".format(self.bad_log_dirs))
+                        logging.debug('%s: bad_log_dirs = %i', self.__class__.__name__, self.bad_log_dirs)
 
                     if bean[key] == 'Hadoop:service=NodeManager,name=ShuffleMetrics':
                         self.shuffle_outputs_failed = int(bean['ShuffleOutputsFailed'])
-                        logging.debug("NodeManager: shuffle_outputs_failed = {0}".format(self.shuffle_outputs_failed))
+                        logging.debug('%s: shuffle_outputs_failed = %i', self.__class__.__name__, self.shuffle_outputs_failed)
                         self.shuffle_connections = int(bean['ShuffleConnections'])
-                        logging.debug("NodeManager: shuffle_connections = {0}".format(self.shuffle_connections))
+                        logging.debug('%s: shuffle_connections = %i', self.__class__.__name__, self.shuffle_connections)
 
                     if bean[key] == 'Hadoop:service=NodeManager,name=MetricsSystem,sub=Stats':
                         self.num_active_sources = int(bean['NumActiveSources'])
-                        logging.debug("NodeManager: num_active_sources = {0}".format(self.num_active_sources))
+                        logging.debug('%s: num_active_sources = %i', self.__class__.__name__, self.num_active_sources)
                         self.num_all_sources = int(bean['NumAllSources'])
-                        logging.debug("NodeManager: num_all_sources = {0}".format(self.num_all_sources))
+                        logging.debug('%s: num_all_sources = %i', self.__class__.__name__, self.num_all_sources)
                         self.num_active_sinks = int(bean['NumActiveSinks'])
-                        logging.debug("NodeManager: num_active_sinks = {0}".format(self.num_active_sinks))
+                        logging.debug('%s: num_active_sinks = %i', self.__class__.__name__, self.num_active_sinks)
                         self.sink_timeline_dropped = int(bean['Sink_timelineDropped'])
-                        logging.debug("NodeManager: sink_timeline_dropped = {0}".format(self.sink_timeline_dropped))
+                        logging.debug('%s: sink_timeline_dropped = %i', self.__class__.__name__, self.sink_timeline_dropped)
                         self.sink_timeline_q_size = int(bean['Sink_timelineQsize'])
-                        logging.debug("NodeManager: sink_timeline_q_size = {0}".format(self.sink_timeline_q_size))
-
-
+                        logging.debug('%s: sink_timeline_q_size = %i', self.__class__.__name__, self.sink_timeline_q_size)
 
 
 class AppTimeline(JmxHadoopHost):
     """
     App Timeline server for YARN
     """
-    def __init__(self, host, port = 8188):
+    def __init__(self, host, port=8188):
         """
         """
         self.description = "App Timeline Server"
-        logging.debug("Initializing {0}: {1}...".format(self.description, host.name))
+        logging.debug('Initializing %s: %s...', self.description, host.fqdn)
         super(AppTimeline, self).__init__(host, port)
 
         apptimeline_uri = '/hosts/' + self.fqdn + '/host_components/APP_TIMELINE_SERVER'
         self.ambari_url = self.ambari.url + apptimeline_uri
 
-        logging.debug("Initialization of {0} complete.".format(self.description))
+        logging.debug('Initialization of %s complete.', self.description)
 
 
 class HbaseMaster(JmxHadoopHost):
     """
     HBase Master server
     """
-    def __init__(self, host, port = 16010):
+    def __init__(self, host, port=16010):
         """
         """
-        self.description = "HBase Master"
-        logging.debug("Initializing {0}: {1}...".format(self.description, host.name))
+        self.description = 'HBase Master'
+        logging.debug('Initializing %s: %s...', self.description, host.fqdn)
         super(HbaseMaster, self).__init__(host, port)
 
         hbasemaster_uri = '/hosts/' + self.fqdn + '/host_components/HBASE_MASTER'
         self.ambari_url = self.ambari.url + hbasemaster_uri
 
         self.state = self.__get_state(self.jmx_dict)
-        self.__set_status(self.jmx_dict)
+        self.__set_properties(self.jmx_dict)
 
-        logging.debug("Initialization of {0} complete.".format(self.description))
+        logging.debug('Initialization of %s complete.', self.description)
 
 
     def get_state(self):
@@ -940,11 +967,11 @@ class HbaseMaster(JmxHadoopHost):
                             state = 'active'
                         else:
                             state = 'standby'
-                        logging.debug("HBaseMaster: state = {}".format(state.upper()))
+                        logging.debug('%s: state = %s', self.__class__.__name__, state)
                         return state
 
 
-    def __set_status(self, jmx_dict):
+    def __set_properties(self, jmx_dict):
         """
         Private method to set variables based on JMX data
         """
@@ -952,43 +979,46 @@ class HbaseMaster(JmxHadoopHost):
             for key in bean.keys():
                 if key == 'name':
                     if bean[key] == 'Hadoop:service=HBase,name=Master,sub=Balancer':
-                        self.balancer_num_ops = int(bean['BalancerCluster_num_ops'])
-                        logging.debug("HBaseMaster: balancer_num_ops = {0}".format(self.balancer_num_ops))
+                        self.balancer_ops = int(bean['BalancerCluster_num_ops'])
+                        logging.debug('%s: balancer_ops = %i', self.__class__.__name__, self.balancer_ops)
                         self.balancer_min = int(bean['BalancerCluster_min'])
-                        logging.debug("HBaseMaster: balancer_min = {0}".format(self.balancer_min))
+                        logging.debug('%s: balancer_min = %i', self.__class__.__name__, self.balancer_min)
                         self.balancer_max = int(bean['BalancerCluster_max'])
-                        logging.debug("HBaseMaster: balancer_max = {0}".format(self.balancer_max))
+                        logging.debug('%s: balancer_max = %i', self.__class__.__name__, self.balancer_max)
                         self.balancer_mean = float(bean['BalancerCluster_mean'])
-                        logging.debug("HBaseMaster: balancer_mean = {0}".format(self.balancer_mean))
+                        logging.debug('%s: balancer_mean = %f', self.__class__.__name__, self.balancer_mean)
 
                     if bean[key] == 'Hadoop:service=HBase,name=Master,sub=AssignmentManger':
                         self.rit_oldest_age = int(bean['ritOldestAge'])
-                        logging.debug("HBaseMaster: rit_oldest_age = {0}".format(self.rit_oldest_age))
-                        self.rit_count_over_threshold = int(bean['ritCountOverThreshold'])
-                        logging.debug("HBaseMaster: rit_count_over_threshold = {0}".format(self.rit_count_over_threshold))
+                        logging.debug('%s: rit_oldest_age = %i', self.__class__.__name__, self.rit_oldest_age)
+                        self.rit_over_threshold = int(bean['ritCountOverThreshold'])
+                        logging.debug('%s: rit_over_threshold = %i', self.__class__.__name__, self.rit_over_threshold)
                         self.rit_count = int(bean['ritCount'])
-                        logging.debug("HBaseMaster: rit_count = {0}".format(self.rit_count))
-                        self.assign_num_ops = int(bean['Assign_num_ops'])
-                        logging.debug("HBaseMaster: assign_num_ops = {0}".format(self.assign_num_ops))
+                        logging.debug('%s: rit_count = %i', self.__class__.__name__, self.rit_count)
+                        self.assign_ops = int(bean['Assign_num_ops'])
+                        logging.debug('%s: assign_ops = %i', self.__class__.__name__, self.assign_ops)
                         self.assign_min = int(bean['Assign_min'])
-                        logging.debug("HBaseMaster: assign_min = {0}".format(self.assign_min))
+                        logging.debug('%s: assign_min = %i', self.__class__.__name__, self.assign_min)
                         self.assign_max = int(bean['Assign_max'])
-                        logging.debug("HBaseMaster: assign_max = {0}".format(self.assign_max))
+                        logging.debug('%s: assign_max = %i', self.__class__.__name__, self.assign_max)
                         self.assign_mean = float(bean['Assign_mean'])
-                        logging.debug("HBaseMaster: assign_mean = {0}".format(self.assign_mean))
+                        logging.debug('%s: assign_mean = %f', self.__class__.__name__, self.assign_mean)
 
                     if bean[key] == 'Hadoop:service=HBase,name=Master,sub=Server':
-                        if bean['tag.isActiveMaster'] == "true":
-                            self.is_active_master = True
-                        else:
-                            self.is_active_master = False
-                        logging.debug("HBaseMaster: is_active_master = {0}".format(self.is_active_master))
                         self.average_load = float(bean['averageLoad'])
-                        logging.debug("HBaseMaster: average_load = {0}".format(self.average_load))
+                        logging.debug('%s: average_load = %f', self.__class__.__name__, self.average_load)
                         self.num_regionservers = int(bean['numRegionServers'])
-                        logging.debug("HBaseMaster: num_regionservers = {0}".format(self.num_regionservers))
+                        logging.debug('%s: num_regionservers = %i', self.__class__.__name__, self.num_regionservers)
                         self.num_dead_regionservers = int(bean['numDeadRegionServers'])
-                        logging.debug("HBaseMaster: num_dead_regionservers = {0}".format(self.num_dead_regionservers))
+                        logging.debug('%s: num_dead_regionservers = %i', self.__class__.__name__, self.num_dead_regionservers)
+
+
+    def is_healthy(self):
+        """
+        Public method to query the Health of the HBase Master
+        """
+        self.refresh()
+        return self.num_dead_regionservers == 0
 
 
 
@@ -996,102 +1026,117 @@ class RegionServer(JmxHadoopHost):
     """
     HBase Region server
     """
-    def __init__(self, host, port = 16030):
+    def __init__(self, host, port=16030):
         """
         """
         self.description = "HBase Region Server"
-        logging.debug("Initializing {0}: {1}...".format(self.description, host.name))
+        logging.debug('Initializing %s: %s...', self.description, host.fqdn)
         super(RegionServer, self).__init__(host, port)
 
         regionserver_uri = '/hosts/' + self.fqdn + '/host_components/HBASE_REGIONSERVER'
         self.ambari_url = self.ambari.url + regionserver_uri
 
-        logging.debug("Initialization of {0} complete.".format(self.description))
+        logging.debug('Initialization of %s complete.', self.description)
 
 
 class PhoenixQueryServer(HadoopHost):
     """
     Phoenix Query server for HBase
     """
-    def __init__(self, host, port = 8765):
+    def __init__(self, host, port=8765):
         """
         """
         self.description = "Phoenix Query Server"
-        logging.debug("Initializing {0}: {1}...".format(self.description, host.name))
+        logging.debug('Initializing %s: %s...', self.description, host.fqdn)
         super(PhoenixQueryServer, self).__init__(host, port)
 
         phoenixqueryserver_uri = '/hosts/' + self.fqdn + '/host_components/PHOENIX_QUERY_SERVER'
         self.ambari_url = self.ambari.url + phoenixqueryserver_uri
 
-        logging.debug("Initialization of {0} complete.".format(self.description))
+        logging.debug('Initialization of %s complete.', self.description)
 
 
 
 class JobHistory(JmxHadoopHost):
     """
     """
-    def __init__(self, host, port = 19888):
+    def __init__(self, host, port=19888):
         """
         """
         self.description = "MapReduce2 Job History"
-        logging.debug("Initializing {0}: {1}...".format(self.description, host.name))
-        super(Oozie, self).__init__(host, port)
+        logging.debug('Initializing %s: %s...', self.description, host.fqdn)
+        super(JobHistory, self).__init__(host, port)
 
         jobhistory_uri = '/hosts/' + self.fqdn + '/host_components/HISTORYSERVER'
         self.ambari_url = self.ambari.url + jobhistory_uri
 
-        logging.debug("Initialization of {0} complete.".format(self.description))
+        logging.debug('Initialization of %s complete.', self.description)
 
 
 
 class Oozie(HadoopHost):
     """
     """
-    def __init__(self, host, port = 11000):
+    def __init__(self, host, port=11000):
         """
         """
         self.description = "Oozie Server"
-        logging.debug("Initializing {0}: {1}...".format(self.description, host.name))
+        logging.debug('Initializing %s: %s...', self.description, host.fqdn)
         super(Oozie, self).__init__(host, port)
 
         oozie_uri = '/hosts/' + self.fqdn + '/host_components/OOZIE_SERVER'
         self.ambari_url = self.ambari.url + oozie_uri
 
-        logging.debug("Initialization of {0} complete.".format(self.description))
+        logging.debug('Initialization of %s complete.', self.description)
 
 
 class ZooKeeper(HadoopHost):
     """
     """
-    def __init__(self, host, port = 2181):
+    def __init__(self, host, port=2181):
         """
         """
         self.description = "ZooKeeper"
-        logging.debug("Initializing {0}: {1}...".format(self.description, host.name))
-        super(Oozie, self).__init__(host, port)
+        logging.debug('Initializing %s: %s...', self.description, host.fqdn)
+        super(ZooKeeper, self).__init__(host, port)
 
         zookeeper_uri = '/hosts/' + self.fqdn + '/host_components/ZOOKEEPER_SERVER'
         self.ambari_url = self.ambari.url + zookeeper_uri
 
-        logging.debug("Initialization of {0} complete.".format(self.description))
+        logging.debug('Initialization of %s complete.', self.description)
 
 
 
 class SparkHistory(HadoopHost):
     """
     """
-    def __init__(self, host, port = 18080):
+    def __init__(self, host, port=18080):
         """
         """
         self.description = "Spark History"
-        logging.debug("Initializing {0}: {1}...".format(self.description, host.name))
+        logging.debug('Initializing %s: %s...', self.description, host.fqdn)
         super(SparkHistory, self).__init__(host, port)
 
         sparkhistory_uri = '/hosts/' + self.fqdn + '/host_components/SPARK_JOBHISTORYSERVER'
         self.ambari_url = self.ambari.url + sparkhistory_uri
 
-        logging.debug("Initialization of {0} complete.".format(self.description))
+        logging.debug('Initialization of %s complete.', self.description)
 
+
+class Kafka(HadoopHost):
+    """
+    """
+    def __init__(self, host, port=6667):
+        """
+        """
+        self.description = "Kafka"
+        logging.debug('Initializing %s: %s...', self.description, host.fqdn)
+        super(Kafka, self).__init__(host, port)
+
+        sparkhistory_uri = '/hosts/' + self.fqdn + '/host_components/SPARK_JOBHISTORYSERVER'
+        self.ambari_url = self.ambari.url + sparkhistory_uri
+
+        logging.debug('Initialization of %s complete.', self.description)
 
 
 
@@ -1100,7 +1145,7 @@ class SparkHistory(HadoopHost):
 @click.option('--username', prompt='Enter Admin Username', help='A user account that has admin privileges.')
 @click.option('--password', prompt='Enter Admin Password', help='The password for the admin user.')
 @click.option('--cluster', default='pdxlab', help='')
-@click.option('--domain', default='pdx.lab.org', help='')
+@click.option('--domain', default='lab.pdx.org', help='')
 @click.option('--port', default=8080, help='')
 @click.argument('service')
 def init_script(hostname, username, password, cluster, domain, port, service):
@@ -1151,13 +1196,14 @@ def restart_hdfs(ambari):
     """
     Function which acts as a manifest to restart HDFS services
     """
-    logging.debug("==> Beginning HDFS restart...")
-
+    service_name = 'HDFS'
     namenodes = []
     zkfcs = []
     journalnodes = []
     datanodes = []
     nfs_gateways = []
+
+    logging.debug('==> Beginning %s restart...', service_name)
 
     for host in ambari.hosts:
         if host.namenode:
@@ -1165,8 +1211,8 @@ def restart_hdfs(ambari):
                 namenodes.append(NameNode(host))
                 zkfcs.append(ZkFailoverController(host))
             else:
-                logging.error("NameNode on {0} does not have a Failover Controller!".format(host.name))
-                raise Exception('Exiting...')
+                logging.error('NameNode on %s does not have a Failover Controller!', host.fqdn)
+                raise Exception('This is an unknown configuration state. Exiting...')
 
         if host.journalnode:
             journalnodes.append(JournalNode(host))
@@ -1183,10 +1229,10 @@ def restart_hdfs(ambari):
 
             # Do not proceed until the NameNode exits SafeMode
             while node.get_safemode():
-                logging.warn("{0} on {1} is in SafeMode. Retrying...".format(node.description, node.fqdn))
+                logging.warning('%s on %s is in SafeMode. Retrying...', node.description, node.fqdn)
                 time.sleep(SAFEMODE_RETRY_DELAY)
 
-            logging.info("Restarting {0} on {1}...".format(node.description, node.fqdn))
+            logging.info('Restarting %s on %s...', node.description, node.fqdn)
             node.stop()
             time.sleep(NAMENODE_RESTART_DELAY)
             while node.tcp_port_closed():
@@ -1195,17 +1241,17 @@ def restart_hdfs(ambari):
 
             # Do not proceed until the NameNode exits SafeMode
             while node.get_safemode():
-                logging.warn("{0} on {1} is in SafeMode. Retrying...".format(node.description, node.fqdn))
+                logging.warning('%s on %s is in SafeMode. Retrying...', node.description, node.fqdn)
                 time.sleep(SAFEMODE_RETRY_DELAY)
 
             # Do not proceed unless this NameNode is a Standby
             while node.get_state() != 'standby':
-                logging.warn("{0} on {1} is not a Standby. Retrying...".format(node.description, node.fqdn))
+                logging.warning('%s on %s is not a Standby. Retrying...', node.description, node.fqdn)
                 time.sleep(SAFEMODE_RETRY_DELAY)
 
             for zkfc in zkfcs:
                 if zkfc.fqdn == node.fqdn:
-                    logging.info("Restarting {0} on {1}...".format(zkfc.description, zkfc.fqdn))
+                    logging.info('Restarting %s on %s...', zkfc.description, zkfc.fqdn)
                     zkfc.stop()
                     time.sleep(NAMENODE_RESTART_DELAY)
                     while zkfc.tcp_port_closed():
@@ -1214,12 +1260,12 @@ def restart_hdfs(ambari):
 
             # Do not proceed until the NameNode exits SafeMode
             while node.get_safemode():
-                logging.warn("{0} on {1} is in SafeMode. Retrying...".format(node.description, node.fqdn))
+                logging.warning('%s on %s is in SafeMode. Retrying...', node.description, node.fqdn)
                 time.sleep(SAFEMODE_RETRY_DELAY)
 
             # Do not proceed unless this NameNode is a Standby
             while node.get_state() != 'standby':
-                logging.warn("{0} on {1} is not a Standby. Retrying...".format(node.description, node.fqdn))
+                logging.warning('%s on %s is not a Standby. Retrying...', node.description, node.fqdn)
                 time.sleep(SAFEMODE_RETRY_DELAY)
 
 
@@ -1229,10 +1275,10 @@ def restart_hdfs(ambari):
 
             # Do not proceed until the NameNode exits SafeMode
             while node.get_safemode():
-                logging.warn("{0} on {1} is in SafeMode. Retrying...".format(node.description, node.fqdn))
+                logging.warning('%s on %s is in SafeMode. Retrying...', node.description, node.fqdn)
                 time.sleep(SAFEMODE_RETRY_DELAY)
 
-            logging.info("Restarting {0} on {1}...".format(node.description, node.fqdn))
+            logging.info('Restarting %s on %s...', node.description, node.fqdn)
             node.stop()
             time.sleep(NAMENODE_RESTART_DELAY)
             while node.tcp_port_closed():
@@ -1241,17 +1287,17 @@ def restart_hdfs(ambari):
 
             # Do not proceed until the NameNode exits SafeMode
             while node.get_safemode():
-                logging.warn("{0} on {1} is in SafeMode. Retrying...".format(node.description, node.fqdn))
+                logging.warning('%s on %s is in SafeMode. Retrying...', node.description, node.fqdn)
                 time.sleep(SAFEMODE_RETRY_DELAY)
 
             # Do not proceed unless this NameNode is a Standby
             while node.get_state() != 'standby':
-                logging.warn("{0} on {1} is not a Standby. Retrying...".format(node.description, node.fqdn))
+                logging.warning('%s on %s is not a Standby. Retrying...', node.description, node.fqdn)
                 time.sleep(SAFEMODE_RETRY_DELAY)
 
             for zkfc in zkfcs:
                 if zkfc.fqdn == node.fqdn:
-                    logging.info("Restarting {0} on {1}...".format(zkfc.description, zkfc.fqdn))
+                    logging.info('Restarting %s on %s...', zkfc.description, zkfc.fqdn)
                     zkfc.stop()
                     time.sleep(NAMENODE_RESTART_DELAY)
                     while zkfc.tcp_port_closed():
@@ -1260,14 +1306,13 @@ def restart_hdfs(ambari):
 
             # Do not proceed until the NameNode exits SafeMode
             while node.get_safemode():
-                logging.warn("{0} on {1} is in SafeMode. Retrying...".format(node.description, node.fqdn))
+                logging.warning('%s on %s is in SafeMode. Retrying...', node.description, node.fqdn)
                 time.sleep(SAFEMODE_RETRY_DELAY)
 
             # Do not proceed unless this NameNode is a Standby
             while node.get_state() != 'standby':
-                logging.warn("{0} on {1} is not a Standby. Retrying...".format(node.description, node.fqdn))
+                logging.warning('%s on %s is not a Standby. Retrying...', node.description, node.fqdn)
                 time.sleep(SAFEMODE_RETRY_DELAY)
-
 
 
     # Find the new Active NameNode
@@ -1283,7 +1328,7 @@ def restart_hdfs(ambari):
 
     # Restart the HDFS JournalNodes
     for node in journalnodes:
-        logging.info("Restarting {0} on {1}...".format(node.description, node.fqdn))
+        logging.info('Restarting %s on %s...', node.description, node.fqdn)
         node.stop()
         time.sleep(JOURNALNODE_RESTART_DELAY)
         while node.tcp_port_closed():
@@ -1294,40 +1339,40 @@ def restart_hdfs(ambari):
     # Restart the HDFS Datanodes
     for node in datanodes:
         if node.name in livenodes:
-            logging.info("Restarting {0} on {1}...".format(node.description, node.fqdn))
+            logging.info('Restarting %s on %s...', node.description, node.fqdn)
             node.stop()
             time.sleep(DATANODE_RESTART_DELAY)
             while node.tcp_port_closed():
                 node.start()
                 time.sleep(DATANODE_RESTART_DELAY)
         else:
-            logging.error("DataNode on {0} is not in the LiveNodes list on the active NameNode".format(node.fqdn))
-            raise Exception('Exiting...')
+            logging.error('DataNode on %s is not in the LiveNodes list on the active NameNode', node.fqdn)
+            raise Exception('This is an unknown condition. Exiting...')
 
     for node in nfs_gateways:
-        logging.info("Restarting {0} on {1}...".format(node.description, node.fqdn))
+        logging.info('Restarting %s on %s...', node.description, node.fqdn)
         node.stop()
         time.sleep(DATANODE_RESTART_DELAY)
         while node.tcp_port_closed():
             node.start()
             time.sleep(DATANODE_RESTART_DELAY)
 
-    # Refresh the client configs
+   # Refresh the client configs
     for host in ambari.hosts:
-        logging.info("Refreshing HDFS client configs on {0}...".format(host.fqdn))
-        HadoopService(host, 'HDFS').refresh()
-
+        logging.info('Refreshing %s client configs on %s...', service_name, host.fqdn)
+        HadoopService(host, service_name.upper()).refresh()
 
 
 def restart_yarn(ambari):
     """
     Function which acts as a manifest to restart YARN services
     """
-    logging.debug("==> Beginning YARN restart...")
-
+    service_name = 'YARN'
     resourcemanagers = []
     nodemanagers = []
     apptimelines = []
+
+    logging.debug('==> Beginning %s restart...', service_name)
 
     for host in ambari.hosts:
         if host.resourcemanager:
@@ -1345,7 +1390,7 @@ def restart_yarn(ambari):
 
         if node.state == 'standby':
 
-            logging.info("Restarting {0} on {1}...".format(node.description, node.fqdn))
+            logging.info('Restarting %s on %s...', node.description, node.fqdn)
             node.stop()
             time.sleep(RESOURCEMANAGER_RESTART_DELAY)
             while node.tcp_port_closed():
@@ -1354,7 +1399,7 @@ def restart_yarn(ambari):
 
             # Do not proceed unless this ResourceManager is a Standby
             while node.get_state() != 'standby':
-                logging.warn("{0} on {1} is not a Standby. Retrying...".format(node.description, node.fqdn))
+                logging.warning('%s on %s is not a Standby. Retrying...', node.description, node.fqdn)
                 time.sleep(SAFEMODE_RETRY_DELAY)
 
 
@@ -1363,7 +1408,7 @@ def restart_yarn(ambari):
 
         if node.state == 'active':
 
-            logging.info("Restarting {0} on {1}...".format(node.description, node.fqdn))
+            logging.info('Restarting %s on %s...', node.description, node.fqdn)
             node.stop()
             time.sleep(RESOURCEMANAGER_RESTART_DELAY)
             while node.tcp_port_closed():
@@ -1372,11 +1417,11 @@ def restart_yarn(ambari):
 
             # Do not proceed unless this ResourceManager is a Standby
             while node.get_state() != 'standby':
-                logging.warn("{0} on {1} is not a Standby. Retrying...".format(node.description, node.fqdn))
+                logging.warning('%s on %s is not a Standby. Retrying...', node.description, node.fqdn)
                 time.sleep(SAFEMODE_RETRY_DELAY)
 
     for node in nodemanagers:
-        logging.info("Restarting {0} on {1}...".format(node.description, node.fqdn))
+        logging.info('Restarting %s on %s...', node.description, node.fqdn)
         node.stop()
         time.sleep(NODEMANAGER_RESTART_DELAY)
         while node.tcp_port_closed():
@@ -1384,28 +1429,29 @@ def restart_yarn(ambari):
             time.sleep(NODEMANAGER_RESTART_DELAY)
 
     for node in apptimelines:
-        logging.info("Restarting {0} on {1}...".format(node.description, node.fqdn))
+        logging.info('Restarting %s on %s...', node.description, node.fqdn)
         node.stop()
         time.sleep(NODEMANAGER_RESTART_DELAY)
         while node.tcp_port_closed():
             node.start()
             time.sleep(NODEMANAGER_RESTART_DELAY)
 
-    # Refresh the client configs
+   # Refresh the client configs
     for host in ambari.hosts:
-        logging.info("Refreshing YARN client configs on {0}...".format(host.fqdn))
-        HadoopService(host, 'YARN').refresh()
+        logging.info('Refreshing %s client configs on %s...', service_name, host.fqdn)
+        HadoopService(host, service_name.upper()).refresh()
 
 
 def restart_hbase(ambari):
     """
     Function which acts as a manifest to restart HBase services
     """
-    logging.debug("==> Beginning HBase restart...")
-
+    service_name = 'HBase'
     hbasemasters = []
     regionservers = []
     queryservers = []
+
+    logging.debug('==> Beginning %s restart...', service_name)
 
     for host in ambari.hosts:
         if host.hbasemaster:
@@ -1423,7 +1469,7 @@ def restart_hbase(ambari):
 
         if node.state == 'standby':
 
-            logging.info("Restarting {0} on {1}...".format(node.description, node.fqdn))
+            logging.info('Restarting %s on %s...', node.description, node.fqdn)
             node.stop()
             time.sleep(HBASEMASTER_RESTART_DELAY)
             while node.tcp_port_closed():
@@ -1432,17 +1478,16 @@ def restart_hbase(ambari):
 
             # Do not proceed unless this HBase Master is a Standby
             while node.get_state() != 'standby':
-                logging.warn("{0} on {1} is not a Standby. Retrying...".format(node.description, node.fqdn))
+                logging.warning('%s on %s is not a Standby. Retrying...', node.description, node.fqdn)
                 time.sleep(SAFEMODE_RETRY_DELAY)
-
 
 
     # Now restart the Active HBase Master
     for node in hbasemasters:
 
         if node.state == 'active':
-    
-            logging.info("Restarting {0} on {1}...".format(node.description, node.fqdn))
+
+            logging.info('Restarting %s on %s...', node.description, node.fqdn)
             node.stop()
             time.sleep(HBASEMASTER_RESTART_DELAY)
             while node.tcp_port_closed():
@@ -1451,12 +1496,12 @@ def restart_hbase(ambari):
 
             # Do not proceed unless this HBase Master is a Standby
             while node.get_state() != 'standby':
-                logging.warn("{0} on {1} is not a Standby. Retrying...".format(node.description, node.fqdn))
+                logging.warning('%s on %s is not a Standby. Retrying...', node.description, node.fqdn)
                 time.sleep(SAFEMODE_RETRY_DELAY)
 
 
     for node in regionservers:
-        logging.info("Restarting {0} on {1}...".format(node.description, node.fqdn))
+        logging.info('Restarting %s on %s...', node.description, node.fqdn)
         node.stop()
         time.sleep(REGIONSERVER_RESTART_DELAY)
         while node.tcp_port_closed():
@@ -1464,7 +1509,7 @@ def restart_hbase(ambari):
             time.sleep(REGIONSERVER_RESTART_DELAY)
 
     for node in queryservers:
-        logging.info("Restarting {0} on {1}...".format(node.description, node.fqdn))
+        logging.info('Restarting %s on %s...', node.description, node.fqdn)
         node.stop()
         time.sleep(REGIONSERVER_RESTART_DELAY)
         while node.tcp_port_closed():
@@ -1473,32 +1518,48 @@ def restart_hbase(ambari):
 
     # Refresh the client configs
     for host in ambari.hosts:
-        logging.info("Refreshing HBase client configs on {0}...".format(host.fqdn))
-        HadoopService(host, 'HBASE').refresh()
+        logging.info('Refreshing %s client configs on %s...', service_name, host.fqdn)
+        HadoopService(host, service_name.upper()).refresh()
 
 
 def restart_mr2(ambari):
+    """
+    """
     pass
 
 
 def restart_tez(ambari):
+    """
+    """
+    service_name = 'Tez'
 
     # Refresh the client configs
     for host in ambari.hosts:
-        logging.info("Refreshing Tez client configs on {0}...".format(host.fqdn))
-        HadoopService(host, 'TEZ').refresh()
+        logging.info('Refreshing %s client configs on %s...', service_name, host.fqdn)
+        HadoopService(host, service_name.upper()).refresh()
 
 
 def restart_hive(ambari):
+    """
+    """
     pass
 
 
 def restart_pig(ambari):
-    pass
+    """
+    """
+    service_name = 'Pig'
+
+    # Refresh the client configs
+    for host in ambari.hosts:
+        logging.info('Refreshing %s client configs on %s...', service_name, host.fqdn)
+        HadoopService(host, service_name.upper()).restart()
 
 
 def restart_oozie(ambari):
-
+    """
+    """
+    service_name = 'Oozie'
     oozies = []
 
     for host in ambari.hosts:
@@ -1507,7 +1568,7 @@ def restart_oozie(ambari):
             oozies.append(Oozie(host))
 
     for node in oozies:
-        logging.info("Restarting {0} on {1}...".format(node.description, node.fqdn))
+        logging.info('Restarting %s on %s...', node.description, node.fqdn)
         node.stop()
         time.sleep(OOZIE_RESTART_DELAY)
         while node.tcp_port_closed():
@@ -1516,12 +1577,14 @@ def restart_oozie(ambari):
 
     # Refresh the client configs
     for host in ambari.hosts:
-        logging.info("Refreshing Oozie client configs on {0}...".format(host.fqdn))
-        HadoopService(host, 'OOZIE').refresh()
+        logging.info('Refreshing %s client configs on %s...', service_name, host.fqdn)
+        HadoopService(host, service_name.upper()).refresh()
 
 
 def restart_zookeeper(ambari):
-
+    """
+    """
+    service_name = 'ZooKeeper'
     zookeepers = []
 
     for host in ambari.hosts:
@@ -1530,7 +1593,7 @@ def restart_zookeeper(ambari):
             zookeepers.append(ZooKeeper(host))
 
     for node in zookeepers:
-        logging.info("Restarting {0} on {1}...".format(node.description, node.fqdn))
+        logging.info('Restarting %s on %s...', node.description, node.fqdn)
         node.stop()
         time.sleep(ZOOKEEPER_RESTART_DELAY)
         while node.tcp_port_closed():
@@ -1539,12 +1602,14 @@ def restart_zookeeper(ambari):
 
     # Refresh the client configs
     for host in ambari.hosts:
-        logging.info("Refreshing ZooKeeper client configs on {0}...".format(host.fqdn))
-        HadoopService(host, 'ZOOKEEPER').refresh()
+        logging.info('Refreshing %s client configs on %s...', service_name, host.fqdn)
+        HadoopService(host, service_name.upper()).refresh()
 
 
 def restart_spark(ambari):
-
+    """
+    """
+    service_name = 'Spark'
     sparkhistories = []
 
     for host in ambari.hosts:
@@ -1553,7 +1618,7 @@ def restart_spark(ambari):
             sparkhistories.append(SparkHistory(host))
 
     for node in sparkhistories:
-        logging.info("Restarting {0} on {1}...".format(node.description, node.fqdn))
+        logging.info('Restarting %s on %s...', node.description, node.fqdn)
         node.stop()
         time.sleep(SPARKHISTORY_RESTART_DELAY)
         while node.tcp_port_closed():
@@ -1562,21 +1627,22 @@ def restart_spark(ambari):
 
     # Refresh the client configs
     for host in ambari.hosts:
-        logging.info("Refreshing Spark client configs on {0}...".format(host.fqdn))
-        HadoopService(host, 'SPARK').refresh()
+        logging.info('Refreshing %s client configs on %s...', service_name, host.fqdn)
+        HadoopService(host, service_name.upper()).refresh()
 
 
 def restart_kafka(ambari):
-
+    """
+    """
+    service_name = 'Kafka'
     kafkas = []
 
     for host in ambari.hosts:
-
         if host.kafka:
             kafkas.append(Kafka(host))
 
     for node in kafkas:
-        logging.info("Restarting {0} on {1}...".format(node.description, node.fqdn))
+        logging.info('Restarting %s on %s...', node.description, node.fqdn)
         node.stop()
         time.sleep(KAFKA_RESTART_DELAY)
         while node.tcp_port_closed():
@@ -1585,16 +1651,14 @@ def restart_kafka(ambari):
 
     # Refresh the client configs
     for host in ambari.hosts:
-        logging.info("Refreshing Kafka client configs on {0}...".format(host.fqdn))
-        HadoopService(host, 'KAFKA').refresh()
+        logging.info('Refreshing %s client configs on %s...', service_name, host.fqdn)
+        HadoopService(host, service_name.upper()).refresh()
 
 
 
 
 if __name__ == '__main__':
-    """
-    Initializes the script if it is being called directly
-    """
+
     init_script()
 
 
