@@ -1,4 +1,7 @@
 #!/usr/bin/env python3.5
+"""
+Python script to restart Hadoop services via Ambari's REST API
+"""
 
 import re
 import json
@@ -79,7 +82,30 @@ SERVICES = {
     'SPARK': [
         'SPARK_JOBHISTORYSERVER',
         'SPARK_CLIENT'
+    ],
+    'FALCON': [
+        'FALCON_SERVER',
+        'FALCON_CLIENT'
+    ],
+    'KAFKA': [
+        'KAFKA_BROKER'
+    ],
+    'AMBARI_METRICS': [
+        'METRICS_COLLECTOR',
+        'METRICS_MONITOR'
+    ],
+    'SLIDER': [
+        'SLIDER'
+    ],
+    'SQOOP': [
+        'SQOOP'
+    ],
+    'RANGER': [
+        'RANGER_ADMIN',
+        'RANGER_KMS_SERVER',
+        'RANGER_USERSYNC',
     ]
+
 }
 
 
@@ -94,7 +120,7 @@ logging.getLogger("urllib3").setLevel(logging.WARNING)
 
 class Ambari(object):
     """
-    Ambari Server Object
+    Class which defines an Ambari Server Object
     """
     def __init__(self, name, username, password, cluster, domain, port):
         """
@@ -133,15 +159,16 @@ class Ambari(object):
                 headers=self.headers
             ).content
             return json.loads(req.decode('utf8'))['items']
-        except:
-            logging.warninging('JSON data not returned from %s, Retrying...', self.url + uri)
+        except Exception as exception:
+            logging.warning('%s: JSON data not returned from %s, Retrying...', exception, self.url + uri)
             time.sleep(HTTP_RETRY_DELAY)
             return self.get_items(uri)
 
     def execute(self, url, payload):
         """
+        Submits commands which are run serially
         """
-        logging.debug('Attempting HTTP PUT to %s with payload: %s ...', url, payload)
+        logging.debug('Attempting HTTP PUT to %s with payload: %s', url, payload)
         try:
             req = requests.put(
                 url,
@@ -158,16 +185,16 @@ class Ambari(object):
                 logging.error('HTTP PUT to %s returned: %s', url, json.loads(req.content.decode('utf8')))
                 time.sleep(HTTP_RETRY_DELAY)
                 return self.execute(url, payload)
-        except:
-            logging.warninging('JSON data not returned from %s, Retrying...', url)
+        except Exception as exception:
+            logging.warning('%s: JSON data not returned from %s, Retrying...', exception, url)
             time.sleep(HTTP_RETRY_DELAY)
             return self.execute(url, payload)
 
-
     def queue(self, url, payload):
         """
+        Queues commands which can be run in parallel
         """
-        logging.debug('Attempting HTTP POST to %s with payload: %s ...', url, payload)
+        logging.debug('Attempting HTTP POST to %s with payload: %s', url, payload)
         try:
             req = requests.post(
                 url,
@@ -184,13 +211,14 @@ class Ambari(object):
                 logging.error('HTTP POST to %s returned contents: %s', url, json.loads(req.content.decode('utf8')))
                 time.sleep(HTTP_RETRY_DELAY)
                 return self.queue(url, payload)
-        except:
-            logging.warninging('JSON data not returned from %s, Retrying...', url)
+        except Exception as exception:
+            logging.warning('%s: JSON data not returned from %s, Retrying...', exception, url)
             time.sleep(HTTP_RETRY_DELAY)
             return self.queue(url, payload)
 
     def __set_hosts(self):
         """
+        Private method which auto-discovers which hosts are managed by Ambari
         """
         hosts = []
         uri = '/hosts'
@@ -204,7 +232,7 @@ class Ambari(object):
 
 class Host(object):
     """
-    Host managed by Ambari
+    Class which defines an Ambari-managed Host Object
     """
     def __init__(self, name, domain, ambari):
         """
@@ -235,8 +263,8 @@ class Host(object):
             stdin, stdout, stderr = ssh.exec_command(command)
             logging.debug('SSH to %s succeeded.', self.fqdn)
             return True
-        except:
-            logging.error('SSH to %s failed with command: %s', self.fqdn, command)
+        except Exception as exception:
+            logging.error('%s: SSH to %s failed with command: %s', exception, self.fqdn, command)
             return False
 
     def ssh_with_key(self, private_key, command):
@@ -252,8 +280,8 @@ class Host(object):
                 stdin, stdout, stderr = ssh.exec_command(command)
                 logging.debug('SSH to %s succeeded.', self.fqdn)
                 return True
-            except:
-                logging.error('SSH to %s failed with command: %s', self.fqdn, command)
+            except Exception as exception:
+                logging.error('%s: SSH to %s failed with command: %s', exception, self.fqdn, command)
                 return False
         else:
             logging.error('SSH private key %s not found.', private_key)
@@ -293,21 +321,16 @@ class Host(object):
             self.zookeeper = True if service == 'ZOOKEEPER_SERVER' else False
             self.oozie = True if service == 'OOZIE_SERVER' else False
             self.sparkhistory = True if service == 'SPARK_JOBHISTORYSERVER' else False
-            self.kafka = True if service == 'KAFKA' else False
+            self.kafka = True if service == 'KAFKA_BROKER' else False
 
 
 class HadoopHost(object):
     """
-    Parent Class for various types of Hadoop Hosts
+    Class which defines a standard Hadoop Host Object
     """
     def __init__(self, host, port):
         """
         """
-        # try:
-        #    self.description
-        #except NameError:
-        #    self.description = "Service"
-
         if not 'self.description' in locals() or 'self.description' in globals():
             self.description = "Service"
 
@@ -362,10 +385,10 @@ class HadoopHost(object):
         result = sock.connect_ex((self.fqdn, self.port))
 
         if result == 0:
-            logging.debug('TCP port %s:%s is open.', self.fqdn, str(self.port))
+            logging.debug('TCP port %s:%i is open.', self.fqdn, self.port)
             return True
         else:
-            logging.warning('TCP port %s:%s is closed.', self.fqdn, str(self.port))
+            logging.warning('TCP port %s:%i is closed.', self.fqdn, self.port)
             return False
 
     def tcp_port_closed(self):
@@ -376,12 +399,11 @@ class HadoopHost(object):
         result = sock.connect_ex((self.fqdn, self.port))
 
         if result == 0:
-            logging.debug('TCP port %s:%s is open.', self.fqdn, str(self.port))
+            logging.debug('TCP port %s:%i is open.', self.fqdn, self.port)
             return False
         else:
-            logging.debug('TCP port %s:%s is closed.', self.fqdn, str(self.port))
+            logging.debug('TCP port %s:%i is closed.', self.fqdn, self.port)
             return True
-
 
     def is_healthy(self):
         """
@@ -392,10 +414,9 @@ class HadoopHost(object):
         return self.tcp_port_open()
 
 
-
 class HadoopService(object):
     """
-    Class to define service-wide properties and actions
+    Class which defines service-wide properties and actions
     """
     def __init__(self, host, service):
         """
@@ -456,7 +477,6 @@ class HadoopService(object):
         return self.ambari.queue(self.ambari_url, self.restart_command)
 
 
-
 class JmxHadoopHost(HadoopHost):
     """
     Parent Class for various types of Hadoop hosts that support
@@ -472,18 +492,19 @@ class JmxHadoopHost(HadoopHost):
 
     def get_jmx(self, url):
         """
-        Connects to the NameNode to get JMX data in JSON format
+        Connects to the service to get JMX data in JSON format
         """
         try:
             return requests.get(url).content
-        except:
-            logging.warninging('JMX Data not returned from {1}, Retrying...'.format(url))
+        except Exception as exception:
+            logging.warning('%s: JMX data not returned from %s, Retrying...', exception, url)
             time.sleep(HTTP_RETRY_DELAY)
             return self.get_jmx(url)
 
 
     def get_beans(self, jmx_data):
         """
+        Get JMX Beans as a Python Dictionary
         """
         return json.loads(jmx_data.decode('utf8'))['beans']
 
@@ -593,7 +614,7 @@ class NameNode(JmxHadoopHost):
                             if re.match('In Service', json.loads(bean['LiveNodes'])[node]['adminState']):
                                 livenodes.append(name)
                             else:
-                                logging.warninging('Found Dead Datanode: {0}'.format(name))
+                                logging.warning('Found Dead Datanode: {0}'.format(name))
                                 deadnodes.append(name)
         self.livenodes = sorted(livenodes)
         logging.debug('NameNode: livenodes = %s', self.livenodes)
@@ -609,10 +630,7 @@ class NameNode(JmxHadoopHost):
             for key in bean.keys():
                 if key == 'name':
                     if bean[key] == 'Hadoop:service=NameNode,name=NameNodeStatus':
-                        if bean['SecurityEnabled'] == 'true':
-                            self.security_enabled = True
-                        else:
-                            self.security_enabled = False
+                        self.security_enabled = True if bean['SecurityEnabled'] == 'true' else False
 
                     if bean[key] == 'Hadoop:service=NameNode,name=StartupProgress':
                         self.startup_percent_complete = float(bean['PercentComplete'])
@@ -636,13 +654,9 @@ class NameNode(JmxHadoopHost):
 
                     if bean[key] == 'Hadoop:service=NameNode,name=NameNodeInfo':
                         self.threads = int(bean['Threads'])
-                        if bean['UpgradeFinalized'] == 'true':
-                            self.finalized = True
-                        else:
-                            self.finalized = False
+                        self.finalized = True if bean['UpgradeFinalized'] == 'true' else False
                         self.total_blocks = int(bean['TotalBlocks'])
                         self.total_files = int(bean['TotalFiles'])
-
 
     def is_healthy(self):
         """
@@ -722,7 +736,7 @@ class DataNode(JmxHadoopHost):
         Public method to query the Health of the DataNode
         """
         self.refresh()
-        return self.failed_volumes == 0 and len(self.namenodes) > 1 
+        return self.failed_volumes == 0 and len(self.namenodes) > 1
 
 
 class JournalNode(JmxHadoopHost):
@@ -796,8 +810,8 @@ class ResourceManager(JmxHadoopHost):
                 logging.error('HTTP GET to %s returned contents: %s', url, req.content)
                 time.sleep(HTTP_RETRY_DELAY)
                 return self.get_state()
-        except:
-            logging.warninging('HTML data not returned from %s, Retrying...', url)
+        except Exception as exception:
+            logging.warning('%s: HTML data not returned from %s, Retrying...', exception, url)
             time.sleep(HTTP_RETRY_DELAY)
             return self.get_state()
 
@@ -1129,11 +1143,11 @@ class Kafka(HadoopHost):
     def __init__(self, host, port=6667):
         """
         """
-        self.description = "Kafka"
+        self.description = "Kafka Broker"
         logging.debug('Initializing %s: %s...', self.description, host.fqdn)
         super(Kafka, self).__init__(host, port)
 
-        sparkhistory_uri = '/hosts/' + self.fqdn + '/host_components/SPARK_JOBHISTORYSERVER'
+        sparkhistory_uri = '/hosts/' + self.fqdn + '/host_components/KAFKA_BROKER'
         self.ambari_url = self.ambari.url + sparkhistory_uri
 
         logging.debug('Initialization of %s complete.', self.description)
@@ -1153,42 +1167,44 @@ def init_script(hostname, username, password, cluster, domain, port, service):
     """
     name = hostname.split('.')[0]
 
-    logging.debug("===> Step 1. Connect to Ambari server and Discover Ambari-managed Hosts.")
+    logging.debug('===> Step 1. Connect to Ambari server and Discover Ambari-managed Hosts.')
     ambari = Ambari(name, username, password, cluster, domain, port)
 
-    logging.debug("===> Step 2. Select the proper subroutine(s) to execute.")
+    logging.debug('===> Step 2. Select the proper subroutine(s) to execute.')
 
-    if service.upper() == 'HDFS' or service.upper() == 'ALL':
+    hdp_svc = service.upper()
+
+    if hdp_svc == 'HDFS' or hdp_svc == 'ALL':
         restart_hdfs(ambari)
 
-    if service.upper() == 'YARN' or service.upper() == 'ALL':
+    if hdp_svc == 'YARN' or hdp_svc == 'ALL':
         restart_yarn(ambari)
 
-    if service.upper() == 'HBASE' or service.upper() == 'ALL':
+    if hdp_svc == 'HBASE' or hdp_svc == 'ALL':
         restart_hbase(ambari)
 
-    if service.upper() == 'MR2' or service.upper() == 'MAPREDUCE2' or service.upper() == 'ALL':
+    if hdp_svc == 'MR2' or hdp_svc == 'MAPREDUCE2' or hdp_svc == 'ALL':
         restart_mr2(ambari)
 
-    if service.upper() == 'TEZ' or service.upper() == 'ALL':
+    if hdp_svc == 'TEZ' or hdp_svc == 'ALL':
         restart_tez(ambari)
 
-    if service.upper() == 'HIVE' or service.upper() == 'ALL':
+    if hdp_svc == 'HIVE' or hdp_svc == 'ALL':
         restart_hive(ambari)
 
-    if service.upper() == 'PIG' or service.upper() == 'ALL':
+    if hdp_svc == 'PIG' or hdp_svc == 'ALL':
         restart_pig(ambari)
 
-    if service.upper() == 'OOZIE' or service.upper() == 'ALL':
+    if hdp_svc == 'OOZIE' or hdp_svc == 'ALL':
         restart_oozie(ambari)
 
-    if service.upper() == 'ZOOKEEPER' or service.upper() == 'ALL':
+    if hdp_svc == 'ZOOKEEPER' or hdp_svc == 'ALL':
         restart_zookeeper(ambari)
 
-    if service.upper() == 'SPARK' or service.upper() == 'ALL':
+    if hdp_svc == 'SPARK' or hdp_svc == 'ALL':
         restart_spark(ambari)
 
-    if service.upper() == 'KAFKA' or service == 'ALL':
+    if hdp_svc == 'KAFKA' or service == 'ALL':
         restart_kafka(ambari)
 
 
@@ -1321,8 +1337,8 @@ def restart_hdfs(ambari):
             active_namenode = node
     try:
         livenodes = active_namenode.get_livenodes()
-    except:
-        logging.error("There are no active NameNodes!")
+    except Exception as exception:
+        logging.error('%s: There are no active NameNodes!', exception)
         raise Exception('Exiting...')
 
 
@@ -1524,12 +1540,14 @@ def restart_hbase(ambari):
 
 def restart_mr2(ambari):
     """
+    Function which acts as a manifest to restart MapReduce2 services
     """
     pass
 
 
 def restart_tez(ambari):
     """
+    Function which acts as a manifest to restart Tez services
     """
     service_name = 'Tez'
 
@@ -1541,12 +1559,14 @@ def restart_tez(ambari):
 
 def restart_hive(ambari):
     """
+    Function which acts as a manifest to restart Hive services
     """
     pass
 
 
 def restart_pig(ambari):
     """
+    Function which acts as a manifest to restart Pig services
     """
     service_name = 'Pig'
 
@@ -1558,6 +1578,7 @@ def restart_pig(ambari):
 
 def restart_oozie(ambari):
     """
+    Function which acts as a manifest to restart Oozie services
     """
     service_name = 'Oozie'
     oozies = []
@@ -1583,6 +1604,7 @@ def restart_oozie(ambari):
 
 def restart_zookeeper(ambari):
     """
+    Function which acts as a manifest to restart ZooKeeper services
     """
     service_name = 'ZooKeeper'
     zookeepers = []
@@ -1608,6 +1630,7 @@ def restart_zookeeper(ambari):
 
 def restart_spark(ambari):
     """
+    Function which acts as a manifest to restart Spark services
     """
     service_name = 'Spark'
     sparkhistories = []
@@ -1633,6 +1656,7 @@ def restart_spark(ambari):
 
 def restart_kafka(ambari):
     """
+    Function which acts as a manifest to restart Kafka services
     """
     service_name = 'Kafka'
     kafkas = []
@@ -1648,12 +1672,6 @@ def restart_kafka(ambari):
         while node.tcp_port_closed():
             node.start()
             time.sleep(KAFKA_RESTART_DELAY)
-
-    # Refresh the client configs
-    for host in ambari.hosts:
-        logging.info('Refreshing %s client configs on %s...', service_name, host.fqdn)
-        HadoopService(host, service_name.upper()).refresh()
-
 
 
 
