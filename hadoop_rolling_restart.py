@@ -20,6 +20,10 @@ RESOURCEMANAGER_RESTART_DELAY=120
 NODEMANAGER_RESTART_DELAY=120
 HBASEMASTER_RESTART_DELAY=120
 REGIONSERVER_RESTART_DELAY=120
+OOZIE_RESTART_DELAY=120
+ZOOKEEPER_RESTART_DELAY=120
+SPARKHISTORY_RESTART_DELAY=120
+KAFKA_RESTART_DELAY=900
 
 # Dictionary of services
 # (Only for reference at this time)
@@ -199,6 +203,7 @@ class Host(object):
         self.apptimeline = False
         self.zookeeper = False
         self.oozie = False
+        self.sparkhistory = False
         self.kafka = False
 
         self.services = []
@@ -280,6 +285,10 @@ class Host(object):
             if service == 'OOZIE_SERVER':
                 logging.debug("Found Oozie on Host {0}...".format(self.name))
                 self.oozie = True
+
+            if service == 'SPARK_JOBHISTORYSERVER':
+                logging.debug("Found Spark History on Host {0}...".format(self.name))
+                self.sparkhistory = True
 
             if service == 'KAFKA':
                 logging.debug("Found Kafka on Host {0}...".format(self.name))
@@ -1018,7 +1027,70 @@ class PhoenixQueryServer(HadoopHost):
 
 
 
+class JobHistory(JmxHadoopHost):
+    """
+    """
+    def __init__(self, host, port = 19888):
+        """
+        """
+        self.description = "MapReduce2 Job History"
+        logging.debug("Initializing {0}: {1}...".format(self.description, host.name))
+        super(Oozie, self).__init__(host, port)
 
+        jobhistory_uri = '/hosts/' + self.fqdn + '/host_components/HISTORYSERVER'
+        self.ambari_url = self.ambari.url + jobhistory_uri
+
+        logging.debug("Initialization of {0} complete.".format(self.description))
+
+
+
+class Oozie(HadoopHost):
+    """
+    """
+    def __init__(self, host, port = 11000):
+        """
+        """
+        self.description = "Oozie Server"
+        logging.debug("Initializing {0}: {1}...".format(self.description, host.name))
+        super(Oozie, self).__init__(host, port)
+
+        oozie_uri = '/hosts/' + self.fqdn + '/host_components/OOZIE_SERVER'
+        self.ambari_url = self.ambari.url + oozie_uri
+
+        logging.debug("Initialization of {0} complete.".format(self.description))
+
+
+class ZooKeeper(HadoopHost):
+    """
+    """
+    def __init__(self, host, port = 2181):
+        """
+        """
+        self.description = "ZooKeeper"
+        logging.debug("Initializing {0}: {1}...".format(self.description, host.name))
+        super(Oozie, self).__init__(host, port)
+
+        zookeeper_uri = '/hosts/' + self.fqdn + '/host_components/ZOOKEEPER_SERVER'
+        self.ambari_url = self.ambari.url + zookeeper_uri
+
+        logging.debug("Initialization of {0} complete.".format(self.description))
+
+
+
+class SparkHistory(HadoopHost):
+    """
+    """
+    def __init__(self, host, port = 18080):
+        """
+        """
+        self.description = "Spark History"
+        logging.debug("Initializing {0}: {1}...".format(self.description, host.name))
+        super(SparkHistory, self).__init__(host, port)
+
+        sparkhistory_uri = '/hosts/' + self.fqdn + '/host_components/SPARK_JOBHISTORYSERVER'
+        self.ambari_url = self.ambari.url + sparkhistory_uri
+
+        logging.debug("Initialization of {0} complete.".format(self.description))
 
 
 
@@ -1041,38 +1113,39 @@ def init_script(hostname, username, password, cluster, domain, port, service):
 
     logging.debug("===> Step 2. Select the proper subroutine(s) to execute.")
 
-    if service == 'HDFS' or service == 'ALL':
+    if service.upper() == 'HDFS' or service.upper() == 'ALL':
         restart_hdfs(ambari)
 
-    if service == 'YARN' or service == 'ALL':
+    if service.upper() == 'YARN' or service.upper() == 'ALL':
         restart_yarn(ambari)
 
-    if service == 'HBase' or service == 'ALL':
+    if service.upper() == 'HBASE' or service.upper() == 'ALL':
         restart_hbase(ambari)
 
-    if service == 'MR2' or service == 'MapReduce2' or service == 'ALL':
+    if service.upper() == 'MR2' or service.upper() == 'MAPREDUCE2' or service.upper() == 'ALL':
         restart_mr2(ambari)
 
-    if service == 'Tez' or service == 'ALL':
+    if service.upper() == 'TEZ' or service.upper() == 'ALL':
         restart_tez(ambari)
 
-    if service == 'Hive' or service == 'ALL':
+    if service.upper() == 'HIVE' or service.upper() == 'ALL':
         restart_hive(ambari)
 
-    if service == 'Pig' or service == 'ALL':
+    if service.upper() == 'PIG' or service.upper() == 'ALL':
         restart_pig(ambari)
 
-    if service == 'Oozie' or service == 'ALL':
+    if service.upper() == 'OOZIE' or service.upper() == 'ALL':
         restart_oozie(ambari)
 
-    if service == 'ZooKeeper' or service == 'ALL':
+    if service.upper() == 'ZOOKEEPER' or service.upper() == 'ALL':
         restart_zookeeper(ambari)
 
-    if service == 'Spark' or service == 'ALL':
+    if service.upper() == 'SPARK' or service.upper() == 'ALL':
         restart_spark(ambari)
 
-    if service == 'Kafka' or service == 'ALL':
+    if service.upper() == 'KAFKA' or service == 'ALL':
         restart_kafka(ambari)
+
 
 def restart_hdfs(ambari):
     """
@@ -1407,26 +1480,114 @@ def restart_hbase(ambari):
 def restart_mr2(ambari):
     pass
 
+
 def restart_tez(ambari):
-    pass
+
+    # Refresh the client configs
+    for host in ambari.hosts:
+        logging.info("Refreshing Tez client configs on {0}...".format(host.fqdn))
+        HadoopService(host, 'TEZ').refresh()
+
 
 def restart_hive(ambari):
     pass
 
+
 def restart_pig(ambari):
     pass
 
+
 def restart_oozie(ambari):
-    pass
+
+    oozies = []
+
+    for host in ambari.hosts:
+
+        if host.oozie:
+            oozies.append(Oozie(host))
+
+    for node in oozies:
+        logging.info("Restarting {0} on {1}...".format(node.description, node.fqdn))
+        node.stop()
+        time.sleep(OOZIE_RESTART_DELAY)
+        while node.tcp_port_closed():
+            node.start()
+            time.sleep(OOZIE_RESTART_DELAY)
+
+    # Refresh the client configs
+    for host in ambari.hosts:
+        logging.info("Refreshing Oozie client configs on {0}...".format(host.fqdn))
+        HadoopService(host, 'OOZIE').refresh()
+
 
 def restart_zookeeper(ambari):
-    pass
+
+    zookeepers = []
+
+    for host in ambari.hosts:
+
+        if host.zookeeper:
+            zookeepers.append(ZooKeeper(host))
+
+    for node in zookeepers:
+        logging.info("Restarting {0} on {1}...".format(node.description, node.fqdn))
+        node.stop()
+        time.sleep(ZOOKEEPER_RESTART_DELAY)
+        while node.tcp_port_closed():
+            node.start()
+            time.sleep(ZOOKEEPER_RESTART_DELAY)
+
+    # Refresh the client configs
+    for host in ambari.hosts:
+        logging.info("Refreshing ZooKeeper client configs on {0}...".format(host.fqdn))
+        HadoopService(host, 'ZOOKEEPER').refresh()
+
 
 def restart_spark(ambari):
-    pass
+
+    sparkhistories = []
+
+    for host in ambari.hosts:
+
+        if host.sparkhistory:
+            sparkhistories.append(SparkHistory(host))
+
+    for node in sparkhistories:
+        logging.info("Restarting {0} on {1}...".format(node.description, node.fqdn))
+        node.stop()
+        time.sleep(SPARKHISTORY_RESTART_DELAY)
+        while node.tcp_port_closed():
+            node.start()
+            time.sleep(SPARKHISTORY_RESTART_DELAY)
+
+    # Refresh the client configs
+    for host in ambari.hosts:
+        logging.info("Refreshing Spark client configs on {0}...".format(host.fqdn))
+        HadoopService(host, 'SPARK').refresh()
+
 
 def restart_kafka(ambari):
-    pass
+
+    kafkas = []
+
+    for host in ambari.hosts:
+
+        if host.kafka:
+            kafkas.append(Kafka(host))
+
+    for node in kafkas:
+        logging.info("Restarting {0} on {1}...".format(node.description, node.fqdn))
+        node.stop()
+        time.sleep(KAFKA_RESTART_DELAY)
+        while node.tcp_port_closed():
+            node.start()
+            time.sleep(KAFKA_RESTART_DELAY)
+
+    # Refresh the client configs
+    for host in ambari.hosts:
+        logging.info("Refreshing Kafka client configs on {0}...".format(host.fqdn))
+        HadoopService(host, 'KAFKA').refresh()
+
 
 
 
