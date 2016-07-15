@@ -17,6 +17,7 @@ import paramiko
 # Set constants for various aspects of the restarts
 
 HTTP_RETRY_DELAY = 5
+MAX_RETRY_BEFORE_RESTART = 10
 NAMENODE_RESTART_DELAY = 120
 SAFEMODE_RETRY_DELAY = 30
 DATANODE_RESTART_DELAY = 120
@@ -25,10 +26,10 @@ RESOURCEMANAGER_RESTART_DELAY = 120
 NODEMANAGER_RESTART_DELAY = 120
 HBASEMASTER_RESTART_DELAY = 120
 REGIONSERVER_RESTART_DELAY = 120
-OOZIE_RESTART_DELAY = 120
+PHXQUERYSERVER_RESTART_DELAY = 120
 ZOOKEEPER_RESTART_DELAY = 120
-SPARKHISTORY_RESTART_DELAY = 120
-KAFKA_RESTART_DELAY = 900
+SPARKTHRIFT_RESTART_DELAY = 120
+KAFKA_RESTART_DELAY = 120
 
 # Dictionary of services
 # (Only for reference at this time)
@@ -81,6 +82,7 @@ SERVICES = {
     ],
     'SPARK': [
         'SPARK_JOBHISTORYSERVER',
+        'SPARK_THRIFTSERVER',
         'SPARK_CLIENT'
     ],
     'FALCON': [
@@ -90,7 +92,7 @@ SERVICES = {
     'KAFKA': [
         'KAFKA_BROKER'
     ],
-    'AMBARI_METRICS': [
+    'AMS': [
         'METRICS_COLLECTOR',
         'METRICS_MONITOR'
     ],
@@ -104,8 +106,20 @@ SERVICES = {
         'RANGER_ADMIN',
         'RANGER_KMS_SERVER',
         'RANGER_USERSYNC',
+    ],
+    'MAHOUT': [
+        'MAHOUT'
+    ],
+    'KNOX': [
+        'KNOX_GATEWAY'
+    ],
+    'STORM': [
+        'NIMBUS',
+        'STORM_REST_API',
+        'STORM_UI_SERVER',
+        'DRPC_SERVER',
+        'SUPERVISOR'
     ]
-
 }
 
 
@@ -129,7 +143,7 @@ class Ambari(object):
         self.domain = domain
         self.fqdn = name + '.' + domain
 
-        logging.debug('Initializing Ambari server: %s', self.fqdn)
+        logging.debug('=> Initializing Ambari server: %s', self.fqdn)
 
         self.port = port
         self.cluster = cluster
@@ -143,7 +157,7 @@ class Ambari(object):
 
         self.__set_hosts()
 
-        logging.debug('Initialization of Ambari complete.')
+        logging.debug('=> Initialization of Ambari complete.')
 
 
     def get_items(self, uri):
@@ -224,8 +238,8 @@ class Ambari(object):
         uri = '/hosts'
         for item in self.get_items(uri):
             name = item['Hosts']['host_name'].split('.')[0]
-            logging.debug('=> Found Host: %s', name)
             domain = '.'.join(item['Hosts']['host_name'].split('.')[1:])
+            logging.debug('%s: Found %s', self.__class__.__name__, name + '.' + domain)
             hosts.append(Host(name, domain, self))
         self.hosts = hosts
 
@@ -240,7 +254,7 @@ class Host(object):
         self.name = name
         self.domain = domain
         self.fqdn = name + '.' + domain
-        logging.debug('Initializing Host: %s...', self.fqdn)
+        logging.debug('=> Initializing Host: %s...', self.fqdn)
 
         self.cluster = ambari.cluster
         self.ambari = ambari
@@ -249,9 +263,27 @@ class Host(object):
         self.url = self.ambari.url + self.uri
 
         self.services = []
+        self.namenode = False
+        self.journalnode = False
+        self.datanode = False
+        self.zkfc = False
+        self.nfs_gateway = False
+        self.hbasemaster = False
+        self.regionserver = False
+        self.phoenix = False
+        self.resourcemanager = False
+        self.nodemanager = False
+        self.apptimeline = False
+        self.jobhistory = False
+        self.zookeeper = False
+        self.oozie = False
+        self.sparkhistory = False
+        self.sparkthrift = False
+        self.kafka = False
+
         self.__set_properties()
 
-        logging.debug('Initialization for Host complete.')
+        logging.debug('=> Initialization for Host complete.')
 
     def ssh_with_password(self, username, password, command):
         """
@@ -297,31 +329,49 @@ class Host(object):
 
             # Anything can run on any server, check them all!
 
-            logging.debug('Found %s on Host %s.', service, self.fqdn)
+            logging.debug('%s: Found %s', self.__class__.__name__, service)
 
             # HDFS services
-
-            self.namenode = True if service == 'NAMENODE' else False
-            self.journalnode = True if service == 'JOURNALNODE' else False
-            self.datanode = True if service == 'DATANODE' else False
-            self.zkfc = True if service == 'ZKFC' else False
-            self.nfs_gateway = True if service == 'NFS_GATEWAY' else False
+            if service == 'NAMENODE':
+                self.namenode = True
+            if service == 'JOURNALNODE':
+                self.journalnode = True
+            if service == 'DATANODE':
+                self.datanode = True
+            if service == 'ZKFC':
+                self.zkfc = True
+            if service == 'NFS_GATEWAY':
+                self.nfs_gateway = True
 
             # HBase services
-            self.hbasemaster = True if service == 'HBASE_MASTER' else False
-            self.regionserver = True if service == 'HBASE_REGIONSERVER' else False
-            self.phoenix = True if service == 'PHOENIX_QUERY_SERVER' else False
+            if service == 'HBASE_MASTER':
+                self.hbasemaster = True
+            if service == 'HBASE_REGIONSERVER':
+                self.regionserver = True
+            if service == 'PHOENIX_QUERY_SERVER':
+                self.phoenix = True
 
             # YARN Services
-            self.resourcemanager = True if service == 'RESOURCEMANAGER' else False
-            self.nodemanager = True if service == 'NODEMANAGER' else False
-            self.apptimeline = True if service == 'APP_TIMELINE_SERVER' else False
+            if service == 'RESOURCEMANAGER':
+                self.resourcemanager = True
+            if service == 'NODEMANAGER':
+                self.nodemanager = True
+            if service == 'APP_TIMELINE_SERVER':
+                self.apptimeline = True
 
             # Other Hadoop services
-            self.zookeeper = True if service == 'ZOOKEEPER_SERVER' else False
-            self.oozie = True if service == 'OOZIE_SERVER' else False
-            self.sparkhistory = True if service == 'SPARK_JOBHISTORYSERVER' else False
-            self.kafka = True if service == 'KAFKA_BROKER' else False
+            if service == 'HISTORYSERVER':
+                self.jobhistory = True
+            if service == 'ZOOKEEPER_SERVER':
+                self.zookeeper = True
+            if service == 'OOZIE_SERVER':
+                self.oozie = True
+            if service == 'SPARK_JOBHISTORYSERVER':
+                self.sparkhistory = True
+            if service == 'SPARK_THRIFTSERVER':
+                self.sparkthrift = True
+            if service == 'KAFKA_BROKER':
+                self.kafka = True
 
 
 class HadoopHost(object):
@@ -331,7 +381,9 @@ class HadoopHost(object):
     def __init__(self, host, port):
         """
         """
-        if not 'self.description' in locals() or 'self.description' in globals():
+        try:
+            self.description
+        except NameError:
             self.description = "Service"
 
         self.name = host.name
@@ -537,7 +589,7 @@ class NameNode(JmxHadoopHost):
         """
         """
         self.description = 'HDFS NameNode'
-        logging.debug('Initializing %s: %s...', self.description, host.fqdn)
+        logging.debug('=> Initializing %s: %s...', self.description, host.fqdn)
         super(NameNode, self).__init__(host, port)
 
         namenode_uri = '/hosts/' + self.fqdn + '/host_components/NAMENODE'
@@ -548,7 +600,7 @@ class NameNode(JmxHadoopHost):
         self.livenodes = []
         self.__set_properties(self.jmx_dict)
 
-        logging.debug('Initialization of %s complete.', self.description)
+        logging.debug('=> Initialization of %s complete.', self.description)
 
 
     def get_state(self):
@@ -569,7 +621,7 @@ class NameNode(JmxHadoopHost):
             for key in bean.keys():
                 if key == 'name':
                     if bean[key] == 'Hadoop:service=NameNode,name=NameNodeStatus':
-                        logging.debug('NameNode: state = %s', bean['State'].upper())
+                        logging.debug('NameNode: state = %s', bean['State'])
                         return bean['State']
 
 
@@ -631,32 +683,53 @@ class NameNode(JmxHadoopHost):
                 if key == 'name':
                     if bean[key] == 'Hadoop:service=NameNode,name=NameNodeStatus':
                         self.security_enabled = True if bean['SecurityEnabled'] == 'true' else False
+                        logging.debug('%s: security_enabled = %s', self.__class__.__name__, self.security_enabled)
 
                     if bean[key] == 'Hadoop:service=NameNode,name=StartupProgress':
                         self.startup_percent_complete = float(bean['PercentComplete'])
+                        logging.debug('%s: startup_percent_complete = %f', self.__class__.__name__, self.startup_percent_complete)
                         self.loading_edits_percent_complete = float(bean['LoadingEditsPercentComplete'])
+                        logging.debug('%s: loading_edits_percent_complete = %f', self.__class__.__name__, self.loading_edits_percent_complete)
 
                     if bean[key] == 'Hadoop:service=NameNode,name=FSNamesystem':
                         self.missing_blocks = int(bean['MissingBlocks'])
+                        logging.debug('%s: missing_blocks = %i', self.__class__.__name__, self.missing_blocks)
                         self.missing_repl_one_blocks = int(bean['MissingReplOneBlocks'])
+                        logging.debug('%s: missing_repl_one_blocks = %i', self.__class__.__name__, self.missing_repl_one_blocks)
                         self.expired_heartbeats = int(bean['ExpiredHeartbeats'])
+                        logging.debug('%s: expired_heartbeats = %i', self.__class__.__name__, self.expired_heartbeats)
                         self.lock_queue_length = int(bean['LockQueueLength'])
+                        logging.debug('%s: lock_queue_length = %i', self.__class__.__name__, self.lock_queue_length)
                         self.num_active_clients = int(bean['NumActiveClients'])
+                        logging.debug('%s: num_active_clients = %i', self.__class__.__name__, self.num_active_clients)
                         self.pending_replication_blocks = int(bean['PendingReplicationBlocks'])
+                        logging.debug('%s: pending_replication_blocks = %i', self.__class__.__name__, self.pending_replication_blocks)
                         self.under_replicated_blocks = int(bean['UnderReplicatedBlocks'])
+                        logging.debug('%s: under_replicated_blocks = %i', self.__class__.__name__, self.under_replicated_blocks)
                         self.corrupt_blocks = int(bean['CorruptBlocks'])
+                        logging.debug('%s: corrupt_blocks = %i', self.__class__.__name__, self.corrupt_blocks)
                         self.scheduled_replication_blocks = int(bean['ScheduledReplicationBlocks'])
+                        logging.debug('%s: scheduled_replication_blocks = %i', self.__class__.__name__, self.scheduled_replication_blocks)
                         self.pending_deletion_blocks = int(bean['PendingDeletionBlocks'])
+                        logging.debug('%s: pending_deletion_blocks = %i', self.__class__.__name__, self.pending_deletion_blocks)
                         self.excess_blocks = int(bean['ExcessBlocks'])
+                        logging.debug('%s: excess_blocks = %i', self.__class__.__name__, self.excess_blocks)
                         self.postponed_misreplicated_blocks = int(bean['PostponedMisreplicatedBlocks'])
+                        logging.debug('%s: postponed_misreplicated_blocks = %i', self.__class__.__name__, self.postponed_misreplicated_blocks)
                         self.pending_datanode_msg_count = int(bean['PendingDataNodeMessageCount'])
+                        logging.debug('%s: pending_datanode_msg_count = %i', self.__class__.__name__, self.pending_datanode_msg_count)
                         self.stale_datanodes = int(bean['StaleDataNodes'])
+                        logging.debug('%s: stale_datanodes = %i', self.__class__.__name__, self.stale_datanodes)
 
                     if bean[key] == 'Hadoop:service=NameNode,name=NameNodeInfo':
                         self.threads = int(bean['Threads'])
+                        logging.debug('%s: threads = %i', self.__class__.__name__, self.threads)
                         self.finalized = True if bean['UpgradeFinalized'] == 'true' else False
+                        logging.debug('%s: finalized = %s', self.__class__.__name__, self.finalized)
                         self.total_blocks = int(bean['TotalBlocks'])
+                        logging.debug('%s: total_blocks = %i', self.__class__.__name__, self.total_blocks)
                         self.total_files = int(bean['TotalFiles'])
+                        logging.debug('%s: total_files = %i', self.__class__.__name__, self.total_files)
 
     def is_healthy(self):
         """
@@ -674,13 +747,13 @@ class ZkFailoverController(HadoopHost):
         """
         """
         self.description = "HDFS Failover Controller"
-        logging.debug('Initializing %s: %s...', self.description, host.fqdn)
+        logging.debug('=> Initializing %s: %s...', self.description, host.fqdn)
         super(ZkFailoverController, self).__init__(host, port)
 
         zkfc_uri = '/hosts/' + self.fqdn + '/host_components/ZKFC'
         self.ambari_url = self.ambari.url + zkfc_uri
 
-        logging.debug('Initialization of %s complete.', self.description)
+        logging.debug('=> Initialization of %s complete.', self.description)
 
 
 
@@ -692,14 +765,14 @@ class DataNode(JmxHadoopHost):
         """
         """
         self.description = "HDFS DataNode"
-        logging.debug('Initializing %s: %s...', self.description, host.fqdn)
+        logging.debug('=> Initializing %s: %s...', self.description, host.fqdn)
         super(DataNode, self).__init__(host, port)
 
         datanode_uri = '/hosts/' + self.fqdn + '/host_components/DATANODE'
         self.ambari_url = self.ambari.url + datanode_uri
         self.__set_properties(self.jmx_dict)
 
-        logging.debug('Initialization of %s complete.', self.description)
+        logging.debug('=> Initialization of %s complete.', self.description)
 
 
     def __set_properties(self, jmx_dict):
@@ -747,13 +820,13 @@ class JournalNode(JmxHadoopHost):
         """
         """
         self.description = "HDFS Journal"
-        logging.debug('Initializing %s: %s...', self.description, host.fqdn)
+        logging.debug('=> Initializing %s: %s...', self.description, host.fqdn)
         super(JournalNode, self).__init__(host, port)
 
         journalnode_uri = '/hosts/' + self.fqdn + '/host_components/JOURNALNODE'
         self.ambari_url = self.ambari.url + journalnode_uri
 
-        logging.debug('Initialization of %s complete.', self.description)
+        logging.debug('=> Initialization of %s complete.', self.description)
 
 
 class NfsGateway(JmxHadoopHost):
@@ -764,13 +837,13 @@ class NfsGateway(JmxHadoopHost):
         """
         """
         self.description = "NFS Gateway"
-        logging.debug('Initializing %s: %s...', self.description, host.fqdn)
+        logging.debug('=> Initializing %s: %s...', self.description, host.fqdn)
         super(NfsGateway, self).__init__(host, port)
 
         nfsgateway_uri = '/hosts/' + self.fqdn + '/host_components/NFS_GATEWAY'
         self.ambari_url = self.ambari.url + nfsgateway_uri
 
-        logging.debug('Initialization of %s complete.', self.description)
+        logging.debug('=> Initialization of %s complete.', self.description)
 
 
 class ResourceManager(JmxHadoopHost):
@@ -781,7 +854,7 @@ class ResourceManager(JmxHadoopHost):
         """
         """
         self.description = "YARN ResourceManager"
-        logging.debug('Initializing %s: %s...', self.description, host.fqdn)
+        logging.debug('=> Initializing %s: %s...', self.description, host.fqdn)
         super(ResourceManager, self).__init__(host, port)
 
 
@@ -791,7 +864,7 @@ class ResourceManager(JmxHadoopHost):
         self.get_state()
         self.get_livenodes()
 
-        logging.debug('Initialization of %s complete.', self.description)
+        logging.debug('=> Initialization of %s complete.', self.description)
 
     def get_state(self):
         """
@@ -877,14 +950,14 @@ class NodeManager(JmxHadoopHost):
         """
         """
         self.description = "YARN NodeManger"
-        logging.debug('Initializing %s: %s...', self.description, host.fqdn)
+        logging.debug('=> Initializing %s: %s...', self.description, host.fqdn)
         super(NodeManager, self).__init__(host, port)
 
         nodemanager_uri = '/hosts/' + self.fqdn + '/host_components/NODEMANAGER'
         self.ambari_url = self.ambari.url + nodemanager_uri
         self.__set_properties(self.jmx_dict)
 
-        logging.debug('Initialization of %s complete.', self.description)
+        logging.debug('=> Initialization of %s complete.', self.description)
 
     def __set_properties(self, jmx_dict):
         """
@@ -930,13 +1003,13 @@ class AppTimeline(JmxHadoopHost):
         """
         """
         self.description = "App Timeline Server"
-        logging.debug('Initializing %s: %s...', self.description, host.fqdn)
+        logging.debug('=> Initializing %s: %s...', self.description, host.fqdn)
         super(AppTimeline, self).__init__(host, port)
 
         apptimeline_uri = '/hosts/' + self.fqdn + '/host_components/APP_TIMELINE_SERVER'
         self.ambari_url = self.ambari.url + apptimeline_uri
 
-        logging.debug('Initialization of %s complete.', self.description)
+        logging.debug('=> Initialization of %s complete.', self.description)
 
 
 class HbaseMaster(JmxHadoopHost):
@@ -947,16 +1020,17 @@ class HbaseMaster(JmxHadoopHost):
         """
         """
         self.description = 'HBase Master'
-        logging.debug('Initializing %s: %s...', self.description, host.fqdn)
+        logging.debug('=> Initializing %s: %s...', self.description, host.fqdn)
         super(HbaseMaster, self).__init__(host, port)
 
         hbasemaster_uri = '/hosts/' + self.fqdn + '/host_components/HBASE_MASTER'
         self.ambari_url = self.ambari.url + hbasemaster_uri
 
         self.state = self.__get_state(self.jmx_dict)
+        self.get_livenodes()
         self.__set_properties(self.jmx_dict)
 
-        logging.debug('Initialization of %s complete.', self.description)
+        logging.debug('=> Initialization of %s complete.', self.description)
 
 
     def get_state(self):
@@ -983,6 +1057,27 @@ class HbaseMaster(JmxHadoopHost):
                             state = 'standby'
                         logging.debug('%s: state = %s', self.__class__.__name__, state)
                         return state
+
+    def get_livenodes(self):
+        """
+        Public method to get a list of LiveNodes from JMX
+        """
+        livenodes = []
+        deadnodes = []
+        for bean in self.jmx_dict:
+            for key in bean.keys():
+                if key == 'name':
+                    if bean[key] == 'Hadoop:service=HBase,name=Master,sub=Server':
+                        for node in bean['tag.liveRegionServers'].split(';'):
+                            name = node.split('.')[0]
+                            livenodes.append(name)
+                        for node in bean['tag.deadRegionServers'].split(';'):
+                            name = node.split('.')[0]
+                            deadnodes.append(name)
+        self.livenodes = sorted(livenodes)
+        self.deadnodes = sorted(deadnodes)
+        logging.debug('%s: livenodes = %s', self.__class__.__name__, self.livenodes)
+        return self.livenodes
 
 
     def __set_properties(self, jmx_dict):
@@ -1044,13 +1139,13 @@ class RegionServer(JmxHadoopHost):
         """
         """
         self.description = "HBase Region Server"
-        logging.debug('Initializing %s: %s...', self.description, host.fqdn)
+        logging.debug('=> Initializing %s: %s...', self.description, host.fqdn)
         super(RegionServer, self).__init__(host, port)
 
         regionserver_uri = '/hosts/' + self.fqdn + '/host_components/HBASE_REGIONSERVER'
         self.ambari_url = self.ambari.url + regionserver_uri
 
-        logging.debug('Initialization of %s complete.', self.description)
+        logging.debug('=> Initialization of %s complete.', self.description)
 
 
 class PhoenixQueryServer(HadoopHost):
@@ -1061,13 +1156,13 @@ class PhoenixQueryServer(HadoopHost):
         """
         """
         self.description = "Phoenix Query Server"
-        logging.debug('Initializing %s: %s...', self.description, host.fqdn)
+        logging.debug('=> Initializing %s: %s...', self.description, host.fqdn)
         super(PhoenixQueryServer, self).__init__(host, port)
 
         phoenixqueryserver_uri = '/hosts/' + self.fqdn + '/host_components/PHOENIX_QUERY_SERVER'
         self.ambari_url = self.ambari.url + phoenixqueryserver_uri
 
-        logging.debug('Initialization of %s complete.', self.description)
+        logging.debug('=> Initialization of %s complete.', self.description)
 
 
 
@@ -1078,13 +1173,13 @@ class JobHistory(JmxHadoopHost):
         """
         """
         self.description = "MapReduce2 Job History"
-        logging.debug('Initializing %s: %s...', self.description, host.fqdn)
+        logging.debug('=> Initializing %s: %s...', self.description, host.fqdn)
         super(JobHistory, self).__init__(host, port)
 
         jobhistory_uri = '/hosts/' + self.fqdn + '/host_components/HISTORYSERVER'
         self.ambari_url = self.ambari.url + jobhistory_uri
 
-        logging.debug('Initialization of %s complete.', self.description)
+        logging.debug('=> Initialization of %s complete.', self.description)
 
 
 
@@ -1095,13 +1190,13 @@ class Oozie(HadoopHost):
         """
         """
         self.description = "Oozie Server"
-        logging.debug('Initializing %s: %s...', self.description, host.fqdn)
+        logging.debug('=> Initializing %s: %s...', self.description, host.fqdn)
         super(Oozie, self).__init__(host, port)
 
         oozie_uri = '/hosts/' + self.fqdn + '/host_components/OOZIE_SERVER'
         self.ambari_url = self.ambari.url + oozie_uri
 
-        logging.debug('Initialization of %s complete.', self.description)
+        logging.debug('=> Initialization of %s complete.', self.description)
 
 
 class ZooKeeper(HadoopHost):
@@ -1111,13 +1206,13 @@ class ZooKeeper(HadoopHost):
         """
         """
         self.description = "ZooKeeper"
-        logging.debug('Initializing %s: %s...', self.description, host.fqdn)
+        logging.debug('=> Initializing %s: %s...', self.description, host.fqdn)
         super(ZooKeeper, self).__init__(host, port)
 
         zookeeper_uri = '/hosts/' + self.fqdn + '/host_components/ZOOKEEPER_SERVER'
         self.ambari_url = self.ambari.url + zookeeper_uri
 
-        logging.debug('Initialization of %s complete.', self.description)
+        logging.debug('=> Initialization of %s complete.', self.description)
 
 
 
@@ -1128,13 +1223,30 @@ class SparkHistory(HadoopHost):
         """
         """
         self.description = "Spark History"
-        logging.debug('Initializing %s: %s...', self.description, host.fqdn)
+        logging.debug('=> Initializing %s: %s...', self.description, host.fqdn)
         super(SparkHistory, self).__init__(host, port)
 
         sparkhistory_uri = '/hosts/' + self.fqdn + '/host_components/SPARK_JOBHISTORYSERVER'
         self.ambari_url = self.ambari.url + sparkhistory_uri
 
-        logging.debug('Initialization of %s complete.', self.description)
+        logging.debug('=> Initialization of %s complete.', self.description)
+
+
+class SparkThrift(HadoopHost):
+    """
+    """
+    def __init__(self, host, port=4040):
+        """
+        """
+        self.description = "Spark Thrift"
+        logging.debug('=> Initializing %s: %s...', self.description, host.fqdn)
+        super(SparkThrift, self).__init__(host, port)
+
+        sparkhistory_uri = '/hosts/' + self.fqdn + '/host_components/SPARK_THRIFTSERVER'
+        self.ambari_url = self.ambari.url + sparkhistory_uri
+
+        logging.debug('=> Initialization of %s complete.', self.description)
+
 
 
 class Kafka(HadoopHost):
@@ -1144,14 +1256,13 @@ class Kafka(HadoopHost):
         """
         """
         self.description = "Kafka Broker"
-        logging.debug('Initializing %s: %s...', self.description, host.fqdn)
+        logging.debug('=> Initializing %s: %s...', self.description, host.fqdn)
         super(Kafka, self).__init__(host, port)
 
         sparkhistory_uri = '/hosts/' + self.fqdn + '/host_components/KAFKA_BROKER'
         self.ambari_url = self.ambari.url + sparkhistory_uri
 
-        logging.debug('Initialization of %s complete.', self.description)
-
+        logging.debug('=> Initialization of %s complete.', self.description)
 
 
 @click.command()
@@ -1174,38 +1285,67 @@ def init_script(hostname, username, password, cluster, domain, port, service):
 
     hdp_svc = service.upper()
 
-    if hdp_svc == 'HDFS' or hdp_svc == 'ALL':
+    if hdp_svc in ('HDFS', 'ALL'):
         restart_hdfs(ambari)
 
-    if hdp_svc == 'YARN' or hdp_svc == 'ALL':
+    if hdp_svc in ('YARN', 'ALL'):
         restart_yarn(ambari)
 
-    if hdp_svc == 'HBASE' or hdp_svc == 'ALL':
+    if hdp_svc in ('HBASE', 'ALL'):
         restart_hbase(ambari)
 
-    if hdp_svc == 'MR2' or hdp_svc == 'MAPREDUCE2' or hdp_svc == 'ALL':
+    if hdp_svc in ('MR2', 'MAPREDUCE2', 'ALL'):
         restart_mr2(ambari)
 
-    if hdp_svc == 'TEZ' or hdp_svc == 'ALL':
+    if hdp_svc in ('TEZ', 'ALL'):
         restart_tez(ambari)
 
-    if hdp_svc == 'HIVE' or hdp_svc == 'ALL':
+    if hdp_svc in ('HIVE', 'ALL'):
         restart_hive(ambari)
 
-    if hdp_svc == 'PIG' or hdp_svc == 'ALL':
+    if hdp_svc in ('PIG', 'ALL'):
         restart_pig(ambari)
 
-    if hdp_svc == 'OOZIE' or hdp_svc == 'ALL':
+    if hdp_svc in ('OOZIE', 'ALL'):
         restart_oozie(ambari)
 
-    if hdp_svc == 'ZOOKEEPER' or hdp_svc == 'ALL':
+    if hdp_svc in ('ZOOKEEPER', 'ALL'):
         restart_zookeeper(ambari)
 
-    if hdp_svc == 'SPARK' or hdp_svc == 'ALL':
+    if hdp_svc in ('SPARK', 'ALL'):
         restart_spark(ambari)
 
-    if hdp_svc == 'KAFKA' or service == 'ALL':
+    if hdp_svc in ('KAFKA', 'ALL'):
         restart_kafka(ambari)
+
+
+
+def fast_restart(node):
+    """
+    Implements a health-based restart policy rather just waiting a specified
+    amount of time. This procedure depends heavily on the is_healthy() method
+    being properly implemented for the service. If the service only uses the
+    default TCP healthcheck, this is probably not how it should be restarted.
+    """
+    logging.info('Restarting %s on %s...', node.description, node.fqdn)
+    node.stop()
+
+    while node.tcp_port_open():
+        time.sleep(HTTP_RETRY_DELAY)
+
+    node.start()
+
+    while node.tcp_port_closed():
+        time.sleep(HTTP_RETRY_DELAY)
+
+    count = 0
+    while not node.is_healthy():
+        count += 1
+        if count < MAX_RETRY_BEFORE_RESTART:
+            logging.info('Waiting for %s to recover on %s...', node.description, node.fqdn)
+            sleep(HTTP_RETRY_DELAY)
+        else:
+            node.start()
 
 
 def restart_hdfs(ambari):
@@ -1267,12 +1407,7 @@ def restart_hdfs(ambari):
 
             for zkfc in zkfcs:
                 if zkfc.fqdn == node.fqdn:
-                    logging.info('Restarting %s on %s...', zkfc.description, zkfc.fqdn)
-                    zkfc.stop()
-                    time.sleep(NAMENODE_RESTART_DELAY)
-                    while zkfc.tcp_port_closed():
-                        zkfc.start()
-                        time.sleep(NAMENODE_RESTART_DELAY)
+                    fast_restart(zkfc)
 
             # Do not proceed until the NameNode exits SafeMode
             while node.get_safemode():
@@ -1333,13 +1468,13 @@ def restart_hdfs(ambari):
 
     # Find the new Active NameNode
     for node in namenodes:
+        print(node.get_state())
         if node.get_state() == 'active':
-            active_namenode = node
-    try:
-        livenodes = active_namenode.get_livenodes()
-    except Exception as exception:
-        logging.error('%s: There are no active NameNodes!', exception)
-        raise Exception('Exiting...')
+            try:
+                livenodes = node.get_livenodes()
+            except Exception as exception:
+                logging.error('%s: There are no active NameNodes!', exception)
+                raise Exception('Exiting...')
 
 
     # Restart the HDFS JournalNodes
@@ -1393,13 +1528,10 @@ def restart_yarn(ambari):
     for host in ambari.hosts:
         if host.resourcemanager:
             resourcemanagers.append(ResourceManager(host))
-
         if host.nodemanager:
             nodemanagers.append(NodeManager(host))
-
         if host.apptimeline:
             apptimelines.append(AppTimeline(host))
-
 
     # First restart the Standby Resource Manager(s)
     for node in resourcemanagers:
@@ -1445,12 +1577,7 @@ def restart_yarn(ambari):
             time.sleep(NODEMANAGER_RESTART_DELAY)
 
     for node in apptimelines:
-        logging.info('Restarting %s on %s...', node.description, node.fqdn)
-        node.stop()
-        time.sleep(NODEMANAGER_RESTART_DELAY)
-        while node.tcp_port_closed():
-            node.start()
-            time.sleep(NODEMANAGER_RESTART_DELAY)
+        fast_retsart(node)
 
    # Refresh the client configs
     for host in ambari.hosts:
@@ -1527,10 +1654,10 @@ def restart_hbase(ambari):
     for node in queryservers:
         logging.info('Restarting %s on %s...', node.description, node.fqdn)
         node.stop()
-        time.sleep(REGIONSERVER_RESTART_DELAY)
+        time.sleep(PHXQUERYSERVER_RESTART_DELAY)
         while node.tcp_port_closed():
             node.start()
-            time.sleep(REGIONSERVER_RESTART_DELAY)
+            time.sleep(PHXQUERYSERVER_RESTART_DELAY)
 
     # Refresh the client configs
     for host in ambari.hosts:
@@ -1542,7 +1669,20 @@ def restart_mr2(ambari):
     """
     Function which acts as a manifest to restart MapReduce2 services
     """
-    pass
+    service_name = 'MapReduce2'
+    jobhistories = []
+
+    for host in ambari.hosts:
+        if host.jobhistory:
+            jobhistories.append(JobHistory(host))
+
+    for node in jobhistories:
+        fast_restart(node)
+
+    # Refresh the client configs
+    for host in ambari.hosts:
+        logging.info('Refreshing %s client configs on %s...', service_name, host.fqdn)
+        HadoopService(host, service_name.upper()).refresh()
 
 
 def restart_tez(ambari):
@@ -1584,17 +1724,11 @@ def restart_oozie(ambari):
     oozies = []
 
     for host in ambari.hosts:
-
         if host.oozie:
             oozies.append(Oozie(host))
 
     for node in oozies:
-        logging.info('Restarting %s on %s...', node.description, node.fqdn)
-        node.stop()
-        time.sleep(OOZIE_RESTART_DELAY)
-        while node.tcp_port_closed():
-            node.start()
-            time.sleep(OOZIE_RESTART_DELAY)
+        fast_restart(node)
 
     # Refresh the client configs
     for host in ambari.hosts:
@@ -1634,19 +1768,24 @@ def restart_spark(ambari):
     """
     service_name = 'Spark'
     sparkhistories = []
+    sparkthrifts = []
 
     for host in ambari.hosts:
-
         if host.sparkhistory:
             sparkhistories.append(SparkHistory(host))
+        if host.sparkthrift:
+            sparkhistories.append(SparkThrift(host))
 
     for node in sparkhistories:
+        fast_restart(node)
+
+    for node in sparkthrifts:
         logging.info('Restarting %s on %s...', node.description, node.fqdn)
         node.stop()
-        time.sleep(SPARKHISTORY_RESTART_DELAY)
+        time.sleep(SPARKTHRIFT_RESTART_DELAY)
         while node.tcp_port_closed():
             node.start()
-            time.sleep(SPARKHISTORY_RESTART_DELAY)
+            time.sleep(SPARKTHRIFT_RESTART_DELAY)
 
     # Refresh the client configs
     for host in ambari.hosts:
