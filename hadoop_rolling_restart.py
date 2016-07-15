@@ -13,21 +13,54 @@ import click
 import requests
 import paramiko
 
+
 # Set constants for various aspects of the restarts
+
+# Delay before retrying a failed HTTP command
 HTTP_RETRY_DELAY = 5
+
+# Maximum number of TCP port checks to fail before
+# trying to start the srvice again.
 MAX_RETRY_BEFORE_RESTART = 10
-NAMENODE_RESTART_DELAY = 120
+
+# Delay between HDFS NameNode restarts
+NAMENODE_RESTART_DELAY = 180
+
+# Delay before re-checking if NameNode is in SafeMode
 SAFEMODE_RETRY_DELAY = 30
+
+# Delay between HDFS JournalNode restarts
+JOURNALNODE_RESTART_DELAY = 180
+
+# Delay between HDFS DataNode restarts
 DATANODE_RESTART_DELAY = 120
-JOURNALNODE_RESTART_DELAY = 120
-RESOURCEMANAGER_RESTART_DELAY = 120
+
+# Delay between YARN ResourceManager restarts
+RESOURCEMANAGER_RESTART_DELAY = 300
+
+# Delay between YARN NodeManager restarts
 NODEMANAGER_RESTART_DELAY = 120
-HBASEMASTER_RESTART_DELAY = 120
-REGIONSERVER_RESTART_DELAY = 120
+
+# Delay between HBase Master restarts
+HBASEMASTER_RESTART_DELAY = 300
+
+# Delay between HBase RegionServer restarts:
+# Restart one RegionServer every 15 minutes
+REGIONSERVER_RESTART_DELAY = 900
+
+# Delay between Phoenix Query Server restarts
 PHXQUERYSERVER_RESTART_DELAY = 120
-ZOOKEEPER_RESTART_DELAY = 120
+
+# Delay between ZooKeeper restarts
+ZOOKEEPER_RESTART_DELAY = 60
+
+# Delay between Spark Thrift server restarts
 SPARKTHRIFT_RESTART_DELAY = 120
-KAFKA_RESTART_DELAY = 120
+
+# Delay between Kafka Broker restarts:
+# Restart one Kafka Broker every hour
+KAFKA_RESTART_DELAY = 3600
+
 
 # Configure the syslog settings
 FORMAT = "%(asctime)s %(levelname)s %(message)s"
@@ -445,6 +478,7 @@ class HadoopHost(object):
         """
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         result = sock.connect_ex((self.fqdn, self.port))
+        sock.close()
 
         if result == 0:
             logging.debug('TCP port %s:%i is open.', self.fqdn, self.port)
@@ -459,6 +493,7 @@ class HadoopHost(object):
         """
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         result = sock.connect_ex((self.fqdn, self.port))
+        sock.close()
 
         if result == 0:
             logging.debug('TCP port %s:%i is open.', self.fqdn, self.port)
@@ -631,7 +666,7 @@ class NameNode(JmxHadoopHost):
             for key in bean.keys():
                 if key == 'name':
                     if bean[key] == 'Hadoop:service=NameNode,name=NameNodeStatus':
-                        logging.debug('NameNode: state = %s', bean['State'])
+                        logging.debug('%s: state = %s', self.__class__.__name__, bean['State'])
                         return bean['State']
 
 
@@ -654,10 +689,10 @@ class NameNode(JmxHadoopHost):
                 if key == 'name':
                     if bean[key] == 'Hadoop:service=NameNode,name=NameNodeInfo':
                         if re.match('Safe mode is ON.', bean['Safemode']):
-                            logging.debug("NameNode: safemode = True")
+                            logging.debug('%s: safemode = True', self.__class__.__name__)
                             return True
                         else:
-                            logging.debug("NameNode: safemode = False")
+                            logging.debug('%s: safemode = False', self.__class__.__name__)
                             return False
 
 
@@ -679,7 +714,7 @@ class NameNode(JmxHadoopHost):
                                 logging.warning('Found Dead Datanode: {0}'.format(name))
                                 deadnodes.append(name)
         self.livenodes = sorted(livenodes)
-        logging.debug('NameNode: livenodes = %s', self.livenodes)
+        logging.debug('%s: livenodes = %s', self.__class__.__name__, self.livenodes)
         return self.livenodes
 
 
@@ -1299,8 +1334,24 @@ class ZooKeeper(HadoopHost):
         zookeeper_uri = '/hosts/' + self.fqdn + '/host_components/ZOOKEEPER_SERVER'
         self.ambari_url = self.ambari.url + zookeeper_uri
 
+        self.state = self.get_state()
+
         logging.debug('=> Initialization of %s complete.', self.description)
 
+    def get_state(self):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        result = sock.connect_ex((self.fqdn, self.port))
+        sock.send(b'mntr')
+        mntr = sock.recv(4096)
+        sock.close()
+
+        for line in mntr.decode().splitlines():
+            key = re.split('\s+', line.strip())[0]
+            value = re.split('\s+', line.strip())[1]
+            if key == 'zk_server_state':
+                self.state = value
+                logging.debug('%s: state = %s', self.__class__.__name__, self.state)
+                return value
 
 
 class SparkHistory(HadoopHost):
@@ -1828,12 +1879,30 @@ def restart_zookeeper(ambari):
             zookeepers.append(ZooKeeper(host))
 
     for node in zookeepers:
-        logging.info('Restarting %s on %s...', node.description, node.fqdn)
-        node.stop()
-        time.sleep(ZOOKEEPER_RESTART_DELAY)
-        while node.tcp_port_closed():
-            node.start()
+        if node.state == 'follower':
+            logging.info('Restarting %s on %s...', node.description, node.fqdn)
+            node.stop()
             time.sleep(ZOOKEEPER_RESTART_DELAY)
+            while node.tcp_port_closed():
+                node.start()
+                time.sleep(ZOOKEEPER_RESTART_DELAY)
+
+            while node.get_state() != 'follower':
+                logging.warning('%s on %s is not a Follower. Retrying...', node.description, node.fqdn)
+                time.sleep(SAFEMODE_RETRY_DELAY)
+
+    for node in zookeepers:
+        if node.state == 'leader':
+            logging.info('Restarting %s on %s...', node.description, node.fqdn)
+            node.stop()
+            time.sleep(ZOOKEEPER_RESTART_DELAY)
+            while node.tcp_port_closed():
+                node.start()
+                time.sleep(ZOOKEEPER_RESTART_DELAY)
+
+            while node.get_state() != 'follower':
+                logging.warning('%s on %s is not a Follower. Retrying...', node.description, node.fqdn)
+                time.sleep(SAFEMODE_RETRY_DELAY)
 
     # Refresh the client configs
     for host in ambari.hosts:
