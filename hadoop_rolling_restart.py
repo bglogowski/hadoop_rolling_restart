@@ -160,7 +160,7 @@ class Ambari(object):
             ).content
             return json.loads(req.decode('utf8'))['items']
         except Exception as exception:
-            logging.warning('%s: JSON data not returned from %s, Retrying...', exception, self.url + uri)
+            logging.warning('%s: JSON data not returned from %s, Retrying...', exception.__class__.__name__, self.url + uri)
             time.sleep(HTTP_RETRY_DELAY)
             return self.get_items(uri)
 
@@ -186,7 +186,7 @@ class Ambari(object):
                 time.sleep(HTTP_RETRY_DELAY)
                 return self.execute(url, payload)
         except Exception as exception:
-            logging.warning('%s: JSON data not returned from %s, Retrying...', exception, url)
+            logging.warning('%s: JSON data not returned from %s, Retrying...', exception.__class__.__name__, url)
             time.sleep(HTTP_RETRY_DELAY)
             return self.execute(url, payload)
 
@@ -212,7 +212,7 @@ class Ambari(object):
                 time.sleep(HTTP_RETRY_DELAY)
                 return self.queue(url, payload)
         except Exception as exception:
-            logging.warning('%s: JSON data not returned from %s, Retrying...', exception, url)
+            logging.warning('%s: JSON data not returned from %s, Retrying...', exception.__class__.__name__, url)
             time.sleep(HTTP_RETRY_DELAY)
             return self.queue(url, payload)
 
@@ -264,7 +264,7 @@ class Host(object):
             logging.debug('SSH to %s succeeded.', self.fqdn)
             return True
         except Exception as exception:
-            logging.error('%s: SSH to %s failed with command: %s', exception, self.fqdn, command)
+            logging.error('%s: SSH to %s failed with command: %s', exception.__class__.__name__, self.fqdn, command)
             return False
 
     def ssh_with_key(self, private_key, command):
@@ -281,7 +281,7 @@ class Host(object):
                 logging.debug('SSH to %s succeeded.', self.fqdn)
                 return True
             except Exception as exception:
-                logging.error('%s: SSH to %s failed with command: %s', exception, self.fqdn, command)
+                logging.error('%s: SSH to %s failed with command: %s', exception.__class__.__name__, self.fqdn, command)
                 return False
         else:
             logging.error('SSH private key %s not found.', private_key)
@@ -497,7 +497,7 @@ class JmxHadoopHost(HadoopHost):
         try:
             return requests.get(url).content
         except Exception as exception:
-            logging.warning('%s: JMX data not returned from %s, Retrying...', exception, url)
+            logging.warning('%s: JMX data not returned from %s, Retrying...', exception.__class__.__name__, url)
             time.sleep(HTTP_RETRY_DELAY)
             return self.get_jmx(url)
 
@@ -811,7 +811,7 @@ class ResourceManager(JmxHadoopHost):
                 time.sleep(HTTP_RETRY_DELAY)
                 return self.get_state()
         except Exception as exception:
-            logging.warning('%s: HTML data not returned from %s, Retrying...', exception, url)
+            logging.warning('%s: HTML data not returned from %s, Retrying...', exception.__class__.__name__, url)
             time.sleep(HTTP_RETRY_DELAY)
             return self.get_state()
 
