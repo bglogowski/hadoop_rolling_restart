@@ -13,9 +13,7 @@ import click
 import requests
 import paramiko
 
-
 # Set constants for various aspects of the restarts
-
 HTTP_RETRY_DELAY = 5
 MAX_RETRY_BEFORE_RESTART = 10
 NAMENODE_RESTART_DELAY = 120
@@ -30,6 +28,13 @@ PHXQUERYSERVER_RESTART_DELAY = 120
 ZOOKEEPER_RESTART_DELAY = 120
 SPARKTHRIFT_RESTART_DELAY = 120
 KAFKA_RESTART_DELAY = 120
+
+# Configure the syslog settings
+FORMAT = "%(asctime)s %(levelname)s %(message)s"
+logging.basicConfig(format=FORMAT, level=logging.DEBUG)
+logging.getLogger("requests").setLevel(logging.WARNING)
+logging.getLogger("urllib3").setLevel(logging.WARNING)
+
 
 # Dictionary of services
 # (Only for reference at this time)
@@ -94,6 +99,7 @@ SERVICES = {
     ],
     'AMS': [
         'METRICS_COLLECTOR',
+        'METRICS_GRAFANA',
         'METRICS_MONITOR'
     ],
     'SLIDER': [
@@ -121,15 +127,6 @@ SERVICES = {
         'SUPERVISOR'
     ]
 }
-
-
-# Configure the syslog settings
-
-FORMAT = "%(asctime)s %(levelname)s %(message)s"
-
-logging.basicConfig(format=FORMAT, level=logging.DEBUG)
-logging.getLogger("requests").setLevel(logging.WARNING)
-logging.getLogger("urllib3").setLevel(logging.WARNING)
 
 
 class Ambari(object):
@@ -280,6 +277,9 @@ class Host(object):
         self.sparkhistory = False
         self.sparkthrift = False
         self.kafka = False
+        self.ams_collector = False
+        self.ams_grafana = False
+        self.ams_monitor = False
 
         self.__set_properties()
 
@@ -359,6 +359,20 @@ class Host(object):
             if service == 'APP_TIMELINE_SERVER':
                 self.apptimeline = True
 
+            # AMS Services
+            if service == 'METRICS_COLLECTOR':
+                self.ams_collector = True
+            if service == 'METRICS_GRAFANA':
+                self.ams_grafana = True
+            if service == 'METRICS_MONITOR':
+                self.ams_monitor = True
+
+            # Spark Services
+            if service == 'SPARK_JOBHISTORYSERVER':
+                self.sparkhistory = True
+            if service == 'SPARK_THRIFTSERVER':
+                self.sparkthrift = True
+
             # Other Hadoop services
             if service == 'HISTORYSERVER':
                 self.jobhistory = True
@@ -366,10 +380,6 @@ class Host(object):
                 self.zookeeper = True
             if service == 'OOZIE_SERVER':
                 self.oozie = True
-            if service == 'SPARK_JOBHISTORYSERVER':
-                self.sparkhistory = True
-            if service == 'SPARK_THRIFTSERVER':
-                self.sparkthrift = True
             if service == 'KAFKA_BROKER':
                 self.kafka = True
 
@@ -828,6 +838,28 @@ class JournalNode(JmxHadoopHost):
 
         logging.debug('=> Initialization of %s complete.', self.description)
 
+    def __set_properties(self, jmx_dict):
+        """
+        Private method to set variables based on JMX data
+        """
+        for bean in jmx_dict:
+            for key in bean.keys():
+                if key == 'name':
+                    if bean[key] == 'Hadoop:service=JournalNode,name=JvmMetrics':
+                        self.log_fatal = int(bean['LogFatal'])
+                        logging.debug('%s: log_fatal = %i', self.__class__.__name__, self.log_fatal)
+                        self.log_error = int(bean['LogError'])
+                        logging.debug('%s: log_error = %i', self.__class__.__name__, self.log_error)
+                        self.log_warn = int(bean['LogWarn'])
+                        logging.debug('%s: log_warn = %i', self.__class__.__name__, self.log_warn)
+
+    def is_healthy(self):
+        """
+        Public method to query the Health of the JournalNode
+        """
+        self.refresh()
+        return self.log_fatal == 0 and self.log_error == 0
+
 
 class NfsGateway(JmxHadoopHost):
     """
@@ -844,6 +876,61 @@ class NfsGateway(JmxHadoopHost):
         self.ambari_url = self.ambari.url + nfsgateway_uri
 
         logging.debug('=> Initialization of %s complete.', self.description)
+
+    def __set_properties(self, jmx_dict):
+        """
+        Private method to set variables based on JMX data
+        """
+        for bean in jmx_dict:
+            for key in bean.keys():
+                if key == 'name':
+                    if bean[key] == 'Hadoop:service=Nfs3,name=Nfs3Metrics':
+                        self.getattr_avg_time = float(bean['GetattrAvgTime'])
+                        logging.debug('%s: getattr_avg_time = %f', self.__class__.__name__, self.getattr_avg_time)
+                        self.setattr_avg_time = float(bean['SetattrAvgTime'])
+                        logging.debug('%s: setattr_avg_time = %f', self.__class__.__name__, self.setattr_avg_time)
+                        self.lookup_avg_time = float(bean['LookupAvgTime'])
+                        logging.debug('%s: lookup_avg_time = %f', self.__class__.__name__, self.lookup_avg_time)
+                        self.access_avg_time = float(bean['AccessAvgTime'])
+                        logging.debug('%s: access_avg_time = %f', self.__class__.__name__, self.access_avg_time)
+                        self.readlink_avg_time = float(bean['ReadlinkAvgTime'])
+                        logging.debug('%s: readlink_avg_time = %f', self.__class__.__name__, self.readlink_avg_time)
+                        self.read_avg_time = float(bean['ReadAvgTime'])
+                        logging.debug('%s: read_avg_time = %f', self.__class__.__name__, self.read_avg_time)
+                        self.write_avg_time = float(bean['WriteAvgTime'])
+                        logging.debug('%s: write_avg_time = %f', self.__class__.__name__, self.write_avg_time)
+                        self.create_avg_time = float(bean['CreateAvgTime'])
+                        logging.debug('%s: create_avg_time = %f', self.__class__.__name__, self.create_avg_time)
+                        self.mkdir_avg_time = float(bean['MkdirAvgTime'])
+                        logging.debug('%s: mkdir_avg_time = %f', self.__class__.__name__, self.mkdir_avg_time)
+                        self.symlink_avg_time = float(bean['SymlinkAvgTime'])
+                        logging.debug('%s: symlink_avg_time = %f', self.__class__.__name__, self.symlink_avg_time)
+                        self.mknode_avg_time = float(bean['MknodAvgTime'])
+                        logging.debug('%s: mknode_avg_time = %f', self.__class__.__name__, self.mknode_avg_time)
+                        self.remove_avg_time = float(bean['RemoveAvgTime'])
+                        logging.debug('%s: remove_avg_time = %f', self.__class__.__name__, self.remove_avg_time)
+                        self.rmdir_avg_time = float(bean['RmdirAvgTime'])
+                        logging.debug('%s: rmdir_avg_time = %f', self.__class__.__name__, self.rmdir_avg_time)
+                        self.rename_avg_time = float(bean['RenameAvgTime'])
+                        logging.debug('%s: rename_avg_time = %f', self.__class__.__name__, self.rename_avg_time)
+                        self.link_avg_time = float(bean['LinkAvgTime'])
+                        logging.debug('%s: link_avg_time = %f', self.__class__.__name__, self.link_avg_time)
+                        self.readdir_avg_time = float(bean['ReaddirAvgTime'])
+                        logging.debug('%s: readdir_avg_time = %f', self.__class__.__name__, self.readdir_avg_time)
+                        self.readdirplus_avg_time = float(bean['ReaddirplusAvgTime'])
+                        logging.debug('%s: readdirplus_avg_time = %f', self.__class__.__name__, self.readdirplus_avg_time)
+                        self.fsstat_avg_time = float(bean['FsstatAvgTime'])
+                        logging.debug('%s: fsstat_avg_time = %f', self.__class__.__name__, self.fsstat_avg_time)
+                        self.fsinfo_avg_time = float(bean['FsinfoAvgTime'])
+                        logging.debug('%s: fsinfo_avg_time = %f', self.__class__.__name__, self.fsinfo_avg_time)
+                        self.pathconf_avg_time = float(bean['PathconfAvgTime'])
+                        logging.debug('%s: pathconf_avg_time = %f', self.__class__.__name__, self.pathconf_avg_time)
+                        self.commit_avg_time = float(bean['CommitAvgTime'])
+                        logging.debug('%s: commit_avg_time = %f', self.__class__.__name__, self.commit_avg_time)
+                        self.bytes_written = int(bean['BytesWritten'])
+                        logging.debug('%s: bytes_written = %i', self.__class__.__name__, self.bytes_written)
+                        self.bytes_read = int(bean['BytesRead'])
+                        logging.debug('%s: bytes_read = %i', self.__class__.__name__, self.bytes_read)
 
 
 class ResourceManager(JmxHadoopHost):
@@ -1275,6 +1362,7 @@ class Kafka(HadoopHost):
 @click.argument('service')
 def init_script(hostname, username, password, cluster, domain, port, service):
     """
+    Main function that decides what maintenance subroutines to run
     """
     name = hostname.split('.')[0]
 
@@ -1285,17 +1373,17 @@ def init_script(hostname, username, password, cluster, domain, port, service):
 
     hdp_svc = service.upper()
 
+    if hdp_svc in ('ZOOKEEPER', 'ALL'):
+        restart_zookeeper(ambari)
+
     if hdp_svc in ('HDFS', 'ALL'):
         restart_hdfs(ambari)
 
-    if hdp_svc in ('YARN', 'ALL'):
-        restart_yarn(ambari)
-
-    if hdp_svc in ('HBASE', 'ALL'):
-        restart_hbase(ambari)
-
     if hdp_svc in ('MR2', 'MAPREDUCE2', 'ALL'):
         restart_mr2(ambari)
+
+    if hdp_svc in ('YARN', 'ALL'):
+        restart_yarn(ambari)
 
     if hdp_svc in ('TEZ', 'ALL'):
         restart_tez(ambari)
@@ -1303,21 +1391,20 @@ def init_script(hostname, username, password, cluster, domain, port, service):
     if hdp_svc in ('HIVE', 'ALL'):
         restart_hive(ambari)
 
+    if hdp_svc in ('HBASE', 'ALL'):
+        restart_hbase(ambari)
+
     if hdp_svc in ('PIG', 'ALL'):
         restart_pig(ambari)
 
     if hdp_svc in ('OOZIE', 'ALL'):
         restart_oozie(ambari)
 
-    if hdp_svc in ('ZOOKEEPER', 'ALL'):
-        restart_zookeeper(ambari)
-
     if hdp_svc in ('SPARK', 'ALL'):
         restart_spark(ambari)
 
     if hdp_svc in ('KAFKA', 'ALL'):
         restart_kafka(ambari)
-
 
 
 def fast_restart(node):
@@ -1419,7 +1506,6 @@ def restart_hdfs(ambari):
                 logging.warning('%s on %s is not a Standby. Retrying...', node.description, node.fqdn)
                 time.sleep(SAFEMODE_RETRY_DELAY)
 
-
     # Restart ONLY the Active NameNode
     for node in namenodes:
         if node.state == 'active':
@@ -1465,7 +1551,6 @@ def restart_hdfs(ambari):
                 logging.warning('%s on %s is not a Standby. Retrying...', node.description, node.fqdn)
                 time.sleep(SAFEMODE_RETRY_DELAY)
 
-
     # Find the new Active NameNode
     for node in namenodes:
         print(node.get_state())
@@ -1476,7 +1561,6 @@ def restart_hdfs(ambari):
                 logging.error('%s: There are no active NameNodes!', exception)
                 raise Exception('Exiting...')
 
-
     # Restart the HDFS JournalNodes
     for node in journalnodes:
         logging.info('Restarting %s on %s...', node.description, node.fqdn)
@@ -1485,7 +1569,6 @@ def restart_hdfs(ambari):
         while node.tcp_port_closed():
             node.start()
             time.sleep(JOURNALNODE_RESTART_DELAY)
-
 
     # Restart the HDFS Datanodes
     for node in datanodes:
@@ -1550,7 +1633,6 @@ def restart_yarn(ambari):
                 logging.warning('%s on %s is not a Standby. Retrying...', node.description, node.fqdn)
                 time.sleep(SAFEMODE_RETRY_DELAY)
 
-
     # Now restart the Active Resource Manager
     for node in resourcemanagers:
 
@@ -1577,7 +1659,7 @@ def restart_yarn(ambari):
             time.sleep(NODEMANAGER_RESTART_DELAY)
 
     for node in apptimelines:
-        fast_retsart(node)
+        fast_restart(node)
 
    # Refresh the client configs
     for host in ambari.hosts:
@@ -1606,7 +1688,6 @@ def restart_hbase(ambari):
         if host.phoenix:
             queryservers.append(PhoenixQueryServer(host))
 
-
     # First restart the Standby HBase Master(s)
     for node in hbasemasters:
 
@@ -1624,7 +1705,6 @@ def restart_hbase(ambari):
                 logging.warning('%s on %s is not a Standby. Retrying...', node.description, node.fqdn)
                 time.sleep(SAFEMODE_RETRY_DELAY)
 
-
     # Now restart the Active HBase Master
     for node in hbasemasters:
 
@@ -1641,7 +1721,6 @@ def restart_hbase(ambari):
             while node.get_state() != 'standby':
                 logging.warning('%s on %s is not a Standby. Retrying...', node.description, node.fqdn)
                 time.sleep(SAFEMODE_RETRY_DELAY)
-
 
     for node in regionservers:
         logging.info('Restarting %s on %s...', node.description, node.fqdn)
@@ -1813,9 +1892,6 @@ def restart_kafka(ambari):
             time.sleep(KAFKA_RESTART_DELAY)
 
 
-
 if __name__ == '__main__':
 
     init_script()
-
-
