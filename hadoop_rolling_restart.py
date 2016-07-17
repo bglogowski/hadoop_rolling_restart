@@ -21,7 +21,10 @@ HTTP_RETRY_DELAY = 5
 
 # Maximum number of TCP port checks to fail before
 # trying to start the srvice again.
-MAX_RETRY_BEFORE_RESTART = 10
+MAX_RETRY_BEFORE_RESTART = 20
+
+# Seconds to add between health cheacks for restart attempts
+RESTART_BACKOFF = 10
 
 # Delay between HDFS NameNode restarts
 NAMENODE_RESTART_DELAY = 180
@@ -189,7 +192,6 @@ class Ambari(object):
 
         logging.debug('=> Initialization of Ambari complete.')
 
-
     def get_items(self, uri):
         """
         """
@@ -204,7 +206,7 @@ class Ambari(object):
             ).content
             return json.loads(req.decode('utf8'))['items']
         except Exception as exception:
-            logging.warning('%s: JSON data not returned from %s, Retrying...', exception.__class__.__name__, self.url + uri)
+            logging.warning('%s: JSON data not returned from %s. Retrying...', exception.__class__.__name__, self.url + uri)
             time.sleep(HTTP_RETRY_DELAY)
             return self.get_items(uri)
 
@@ -230,7 +232,7 @@ class Ambari(object):
                 time.sleep(HTTP_RETRY_DELAY)
                 return self.execute(url, payload)
         except Exception as exception:
-            logging.warning('%s: JSON data not returned from %s, Retrying...', exception.__class__.__name__, url)
+            logging.warning('%s: JSON data not returned from %s. Retrying...', exception.__class__.__name__, url)
             time.sleep(HTTP_RETRY_DELAY)
             return self.execute(url, payload)
 
@@ -256,7 +258,7 @@ class Ambari(object):
                 time.sleep(HTTP_RETRY_DELAY)
                 return self.queue(url, payload)
         except Exception as exception:
-            logging.warning('%s: JSON data not returned from %s, Retrying...', exception.__class__.__name__, url)
+            logging.warning('%s: JSON data not returned from %s. Retrying...', exception.__class__.__name__, url)
             time.sleep(HTTP_RETRY_DELAY)
             return self.queue(url, payload)
 
@@ -310,6 +312,10 @@ class Host(object):
         self.sparkhistory = False
         self.sparkthrift = False
         self.kafka = False
+        self.hive_metastore = True
+        self.hive_server = True
+        self.hive_mysql = True
+        self.webhcat = True
         self.ams_collector = False
         self.ams_grafana = False
         self.ams_monitor = False
@@ -391,6 +397,16 @@ class Host(object):
                 self.nodemanager = True
             if service == 'APP_TIMELINE_SERVER':
                 self.apptimeline = True
+
+            # Hive Services
+            if service == 'HIVE_METASTORE':
+                self.hive_metastore = True
+            if service == 'HIVE_SERVER':
+                self.hive_server = True
+            if service == 'MYSQL_SERVER':
+                self.hive_mysql = True
+            if service == 'WEBHCAT_SERVER':
+                self.webhcat = True
 
             # AMS Services
             if service == 'METRICS_COLLECTOR':
@@ -529,7 +545,7 @@ class HadoopService(object):
             "RequestInfo": {
                 "command": "RESTART",
                 "context": "Restart {0} Client on {1}".format(self.service, self.host.fqdn),
-                "operation_level":{
+                "operation_level": {
                     "level": "HOST",
                     "cluster_name": "{0}".format(self.host.cluster)
                     }
@@ -547,7 +563,7 @@ class HadoopService(object):
             "RequestInfo": {
                 "command": "RESTART",
                 "context": "Restart {0} on {1}".format(self.service, self.host.fqdn),
-                "operation_level":{
+                "operation_level": {
                     "level": "HOST",
                     "cluster_name": "{0}".format(self.host.cluster)
                     }
@@ -583,47 +599,49 @@ class JmxHadoopHost(HadoopHost):
         """
         """
         super(JmxHadoopHost, self).__init__(host, port)
+
         self.jmx_url = 'http://{0}.{1}:{2}/jmx?qry=Hadoop:*'.format(self.name, self.domain, str(port))
         self.jmx_dict = self.get_jmx_dict(self.jmx_url)
 
+        self.log_fatal = 0
+        self.log_error = 0
+        self.log_warn = 0
 
     def get_jmx(self, url):
         """
-        Connects to the service to get JMX data in JSON format
+        Connects to a server to get JMX data in JSON format
         """
         try:
             return requests.get(url).content
         except Exception as exception:
-            logging.warning('%s: JMX data not returned from %s, Retrying...', exception.__class__.__name__, url)
+            logging.warning('%s: JMX data not returned from %s. Retrying...', exception.__class__.__name__, url)
             time.sleep(HTTP_RETRY_DELAY)
             return self.get_jmx(url)
 
-
     def get_beans(self, jmx_data):
         """
-        Get JMX Beans as a Python Dictionary
+        Get JMX Beans from a JMX dictionary
         """
         return json.loads(jmx_data.decode('utf8'))['beans']
 
-
     def get_jmx_dict(self, jmx_url):
         """
+        Get JMX output as a Python dictionary
         """
         return self.get_beans(self.get_jmx(jmx_url))
 
-    def __set_properties(self):
+    def __set_properties(self, jmx_dict):
         """
         Stub method
         """
         pass
 
-    def refresh(self, jmx_dict):
+    def refresh(self):
         """
-        Public method to set variables based on the latest JMX data
+        Public method to refresh variables based on the latest JMX data
         """
         self.jmx_dict = self.get_jmx_dict(self.jmx_url)
         self.__set_properties(self.jmx_dict)
-
 
 
 class NameNode(JmxHadoopHost):
@@ -647,7 +665,6 @@ class NameNode(JmxHadoopHost):
 
         logging.debug('=> Initialization of %s complete.', self.description)
 
-
     def get_state(self):
         """
         Public method to query the NameNode if it is in ACTIVE or STANDBY mode.
@@ -655,7 +672,6 @@ class NameNode(JmxHadoopHost):
         self.jmx_dict = self.get_jmx_dict(self.jmx_url)
         self.state = self.__get_state(self.jmx_dict)
         return self.state
-
 
     def __get_state(self, jmx_dict):
         """
@@ -669,7 +685,6 @@ class NameNode(JmxHadoopHost):
                         logging.debug('%s: state = %s', self.__class__.__name__, bean['State'])
                         return bean['State']
 
-
     def get_safemode(self):
         """
         Public method to query the NameNode if it is in Safemode.
@@ -677,7 +692,6 @@ class NameNode(JmxHadoopHost):
         self.jmx_dict = self.get_jmx_dict(self.jmx_url)
         self.safemode = self.__get_safemode(self.jmx_dict)
         return self.safemode
-
 
     def __get_safemode(self, jmx_dict):
         """
@@ -695,7 +709,6 @@ class NameNode(JmxHadoopHost):
                             logging.debug('%s: safemode = False', self.__class__.__name__)
                             return False
 
-
     def get_livenodes(self):
         """
         Public method to get a list of LiveNodes from JMX
@@ -711,12 +724,11 @@ class NameNode(JmxHadoopHost):
                             if re.match('In Service', json.loads(bean['LiveNodes'])[node]['adminState']):
                                 livenodes.append(name)
                             else:
-                                logging.warning('Found Dead Datanode: {0}'.format(name))
+                                logging.warning('Found Dead Datanode: %s', name)
                                 deadnodes.append(name)
         self.livenodes = sorted(livenodes)
         logging.debug('%s: livenodes = %s', self.__class__.__name__, self.livenodes)
         return self.livenodes
-
 
     def __set_properties(self, jmx_dict):
         """
@@ -780,7 +792,15 @@ class NameNode(JmxHadoopHost):
         """
         Public method to query the Health of the NameNode
         """
-        return self.get_safemode()
+        self.jmx_dict = self.get_jmx_dict(self.jmx_url)
+        self.__set_properties(self.jmx_dict)
+
+        health_check1 = True if self.startup_percent_complete == 1.000000 else False
+        health_check2 = True if self.loading_edits_percent_complete == 1.000000 else False
+        health_check3 = True if self.num_active_clients > 0 else False
+        health_check4 = not self.get_safemode()
+
+        return health_check1 and health_check2 and health_check3 and health_check4
 
 
 class ZkFailoverController(HadoopHost):
@@ -801,7 +821,6 @@ class ZkFailoverController(HadoopHost):
         logging.debug('=> Initialization of %s complete.', self.description)
 
 
-
 class DataNode(JmxHadoopHost):
     """
     HDFS DataNode host
@@ -818,7 +837,6 @@ class DataNode(JmxHadoopHost):
         self.__set_properties(self.jmx_dict)
 
         logging.debug('=> Initialization of %s complete.', self.description)
-
 
     def __set_properties(self, jmx_dict):
         """
@@ -847,7 +865,6 @@ class DataNode(JmxHadoopHost):
                     if bean[key] == 'Hadoop:service=DataNode,name=JvmMetrics':
                         self.blocked_threads = int(bean['ThreadsBlocked'])
                         logging.debug('%s: blocked_threads = %i', self.__class__.__name__, self.blocked_threads)
-
 
     def is_healthy(self):
         """
@@ -979,7 +996,6 @@ class ResourceManager(JmxHadoopHost):
         logging.debug('=> Initializing %s: %s...', self.description, host.fqdn)
         super(ResourceManager, self).__init__(host, port)
 
-
         resourcemanager_uri = '/hosts/' + self.fqdn + '/host_components/RESOURCEMANAGER'
         self.ambari_url = self.ambari.url + resourcemanager_uri
         self.__set_properties(self.jmx_dict)
@@ -1006,10 +1022,9 @@ class ResourceManager(JmxHadoopHost):
                 time.sleep(HTTP_RETRY_DELAY)
                 return self.get_state()
         except Exception as exception:
-            logging.warning('%s: HTML data not returned from %s, Retrying...', exception.__class__.__name__, url)
+            logging.warning('%s: HTML data not returned from %s. Retrying...', exception.__class__.__name__, url)
             time.sleep(HTTP_RETRY_DELAY)
             return self.get_state()
-
 
     def get_livenodes(self):
         """
@@ -1054,14 +1069,12 @@ class ResourceManager(JmxHadoopHost):
                         self.num_rebooted_nodemanagers = int(bean['NumRebootedNMs'])
                         logging.debug('%s: num_rebooted_nodemanagers = %i', self.__class__.__name__, self.num_rebooted_nodemanagers)
 
-
     def is_healthy(self):
         """
         Public method to query the Health of the ResourceManager
         """
         self.refresh()
         return self.num_unhealthy_nodemanagers == 0 and self.num_lost_nodemanagers == 0
-
 
 
 class NodeManager(JmxHadoopHost):
@@ -1154,7 +1167,6 @@ class HbaseMaster(JmxHadoopHost):
 
         logging.debug('=> Initialization of %s complete.', self.description)
 
-
     def get_state(self):
         """
         Public method to query the HBase Master if it is in ACTIVE or STANDBY mode.
@@ -1162,7 +1174,6 @@ class HbaseMaster(JmxHadoopHost):
         self.jmx_dict = self.get_jmx_dict(self.jmx_url)
         self.state = self.__get_state(self.jmx_dict)
         return self.state
-
 
     def __get_state(self, jmx_dict):
         """
@@ -1200,7 +1211,6 @@ class HbaseMaster(JmxHadoopHost):
         self.deadnodes = sorted(deadnodes)
         logging.debug('%s: livenodes = %s', self.__class__.__name__, self.livenodes)
         return self.livenodes
-
 
     def __set_properties(self, jmx_dict):
         """
@@ -1243,14 +1253,12 @@ class HbaseMaster(JmxHadoopHost):
                         self.num_dead_regionservers = int(bean['numDeadRegionServers'])
                         logging.debug('%s: num_dead_regionservers = %i', self.__class__.__name__, self.num_dead_regionservers)
 
-
     def is_healthy(self):
         """
         Public method to query the Health of the HBase Master
         """
         self.refresh()
         return self.num_dead_regionservers == 0
-
 
 
 class RegionServer(JmxHadoopHost):
@@ -1287,7 +1295,6 @@ class PhoenixQueryServer(HadoopHost):
         logging.debug('=> Initialization of %s complete.', self.description)
 
 
-
 class JobHistory(JmxHadoopHost):
     """
     """
@@ -1302,7 +1309,6 @@ class JobHistory(JmxHadoopHost):
         self.ambari_url = self.ambari.url + jobhistory_uri
 
         logging.debug('=> Initialization of %s complete.', self.description)
-
 
 
 class Oozie(HadoopHost):
@@ -1333,25 +1339,53 @@ class ZooKeeper(HadoopHost):
 
         zookeeper_uri = '/hosts/' + self.fqdn + '/host_components/ZOOKEEPER_SERVER'
         self.ambari_url = self.ambari.url + zookeeper_uri
-
-        self.state = self.get_state()
+        self.state = self.__get_state()
 
         logging.debug('=> Initialization of %s complete.', self.description)
 
     def get_state(self):
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        result = sock.connect_ex((self.fqdn, self.port))
-        sock.send(b'mntr')
-        mntr = sock.recv(4096)
-        sock.close()
+        """
+        """
+        self.state = self.__get_state()
+        return self.state
+
+    def __get_state(self):
+        """
+        """
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            result = sock.connect_ex((self.fqdn, self.port))
+
+        except Exception as exception:
+            logging.error('%s: %s connecting to %s:%i', self.__class__.__name__, exception, self.fqdn, self.port)
+            time.sleep(HTTP_RETRY_DELAY)
+            return self.get_state()
+
+        if result == 0:
+            logging.debug('TCP port %s:%i is open.', self.fqdn, self.port)
+            sock.send(b'mntr')
+            mntr = sock.recv(4096)
+            sock.close()
+
+        else:
+            logging.warning('TCP port %s:%i is closed. Retrying...', self.fqdn, self.port)
+            time.sleep(HTTP_RETRY_DELAY)
+            return self.get_state()
 
         for line in mntr.decode().splitlines():
             key = re.split('\s+', line.strip())[0]
             value = re.split('\s+', line.strip())[1]
             if key == 'zk_server_state':
-                self.state = value
-                logging.debug('%s: state = %s', self.__class__.__name__, self.state)
+                logging.debug('%s: state = %s', self.__class__.__name__, value)
                 return value
+
+    def is_healthy(self):
+        """
+        Public method to query the health of the service
+            - Defaults to a TCP port check
+            - Should be overridden if there are more sophisticated checks available
+        """
+        return self.__get_state() in ('follower', 'leader', 'observer')
 
 
 class SparkHistory(HadoopHost):
@@ -1384,7 +1418,6 @@ class SparkThrift(HadoopHost):
         self.ambari_url = self.ambari.url + sparkhistory_uri
 
         logging.debug('=> Initialization of %s complete.', self.description)
-
 
 
 class Kafka(HadoopHost):
@@ -1424,9 +1457,6 @@ def init_script(hostname, username, password, cluster, domain, port, service):
 
     hdp_svc = service.upper()
 
-    if hdp_svc in ('ZOOKEEPER', 'ALL'):
-        restart_zookeeper(ambari)
-
     if hdp_svc in ('HDFS', 'ALL'):
         restart_hdfs(ambari)
 
@@ -1436,14 +1466,17 @@ def init_script(hostname, username, password, cluster, domain, port, service):
     if hdp_svc in ('YARN', 'ALL'):
         restart_yarn(ambari)
 
+    if hdp_svc in ('ZOOKEEPER', 'ALL'):
+        restart_zookeeper(ambari)
+
+    if hdp_svc in ('HBASE', 'ALL'):
+        restart_hbase(ambari)
+
     if hdp_svc in ('TEZ', 'ALL'):
         restart_tez(ambari)
 
     if hdp_svc in ('HIVE', 'ALL'):
         restart_hive(ambari)
-
-    if hdp_svc in ('HBASE', 'ALL'):
-        restart_hbase(ambari)
 
     if hdp_svc in ('PIG', 'ALL'):
         restart_pig(ambari)
@@ -1466,10 +1499,19 @@ def fast_restart(node):
     default TCP healthcheck, this is probably not how it should be restarted.
     """
     logging.info('Restarting %s on %s...', node.description, node.fqdn)
+
+    while not node.is_healthy():
+        logging.error('%s is not healthy on %s. Waiting...', node.description, node.fqdn)
+        time.sleep(HTTP_RETRY_DELAY)
+
     node.stop()
 
-    while node.tcp_port_open():
+    while not node.tcp_port_closed():
         time.sleep(HTTP_RETRY_DELAY)
+
+    # Once the port is closed, give the process time to shutdown
+    logging.debug('Waiting 60 seconds for JVM process to terminate.')
+    time.sleep(60)
 
     node.start()
 
@@ -1477,27 +1519,44 @@ def fast_restart(node):
         time.sleep(HTTP_RETRY_DELAY)
 
     count = 0
+    restart_delay = HTTP_RETRY_DELAY
     while not node.is_healthy():
         count += 1
         if count < MAX_RETRY_BEFORE_RESTART:
-            logging.info('Waiting for %s to recover on %s...', node.description, node.fqdn)
-            sleep(HTTP_RETRY_DELAY)
+            logging.info('Waiting %is for %s to recover on %s. Try %i', restart_delay, node.description, node.fqdn, count)
+            time.sleep(restart_delay)
+            restart_delay += RESTART_BACKOFF
         else:
+            count = 0
             node.start()
 
 
 def restart_hdfs(ambari):
     """
     Function which acts as a manifest to restart HDFS services
+        1. Restarts the Standby NameNode
+        2. Waits until it exits SafeMode
+        3. Ensures that it is in Standby mode again
+        4. Restarts the ZkFailoverController on the Standby NameNode server
+        5. Verifies that the Standby NameNode did not become active or re-enter SafeMode
+        6. Restarts the Active NameNode
+        7. Waits until it exits SafeMode
+        8. Ensures that it is in Standby mode after it starts
+        9. Restarts the ZkFailoverController on the new Standby NameNode server
+       10. Verifies that the new Standby NameNode did not become active or re-enter SafeMode
+       11. Restarts the JournalNodes one at a time
+       12. Restarts the DataNodes one at a time
+       13. Restarts the NFS Gateway Servers one at a time (if they exist)
+       14. Refreshes the HDFS client configs
     """
     service_name = 'HDFS'
+    logging.debug('==> Beginning %s restart...', service_name)
+
     namenodes = []
     zkfcs = []
     journalnodes = []
     datanodes = []
     nfs_gateways = []
-
-    logging.debug('==> Beginning %s restart...', service_name)
 
     for host in ambari.hosts:
         if host.namenode:
@@ -1604,7 +1663,6 @@ def restart_hdfs(ambari):
 
     # Find the new Active NameNode
     for node in namenodes:
-        print(node.get_state())
         if node.get_state() == 'active':
             try:
                 livenodes = node.get_livenodes()
@@ -1642,17 +1700,142 @@ def restart_hdfs(ambari):
             node.start()
             time.sleep(DATANODE_RESTART_DELAY)
 
-   # Refresh the client configs
+    # Refresh the client configs
     for host in ambari.hosts:
         logging.info('Refreshing %s client configs on %s...', service_name, host.fqdn)
         HadoopService(host, service_name.upper()).refresh()
 
 
+def fast_restart_hdfs(ambari):
+    """
+    Experimental Fast HDFS service restart
+    """
+    service_name = 'HDFS'
+    logging.debug('==> Beginning FAST %s restart...', service_name)
+
+    namenodes = []
+    zkfcs = []
+    journalnodes = []
+    datanodes = []
+    nfs_gateways = []
+
+    for host in ambari.hosts:
+        if host.namenode:
+            if host.zkfc:
+                namenodes.append(NameNode(host))
+                zkfcs.append(ZkFailoverController(host))
+            else:
+                logging.error('NameNode on %s does not have a Failover Controller!', host.fqdn)
+                raise Exception('This is an unknown configuration state. Exiting...')
+
+        if host.journalnode:
+            journalnodes.append(JournalNode(host))
+
+        if host.datanode:
+            datanodes.append(DataNode(host))
+
+        if host.nfs_gateway:
+            nfs_gateways.append(NfsGateway(host))
+
+    # Restart ONLY the standby NameNode(s)
+    for node in namenodes:
+        if node.state == 'standby':
+            if node.corrupt_blocks == 0:
+                fast_restart(node)
+            else:
+                logging.warning('%s is reporting corrupt blocks. Exiting...', node.fqdn)
+                exit(2)
+
+            # Do not proceed unless this NameNode is a Standby
+            while node.get_state() != 'standby':
+                logging.warning('%s on %s is not a Standby. Retrying...', node.description, node.fqdn)
+                time.sleep(SAFEMODE_RETRY_DELAY)
+
+            for zkfc in zkfcs:
+                if zkfc.fqdn == node.fqdn:
+                    fast_restart(zkfc)
+
+            # Do not proceed until the NameNode exits SafeMode
+            while node.get_safemode():
+                logging.warning('%s on %s is in SafeMode. Retrying...', node.description, node.fqdn)
+                time.sleep(SAFEMODE_RETRY_DELAY)
+
+            # Do not proceed unless this NameNode is a Standby
+            while node.get_state() != 'standby':
+                logging.warning('%s on %s is not a Standby. Retrying...', node.description, node.fqdn)
+                time.sleep(SAFEMODE_RETRY_DELAY)
+
+    # Restart ONLY the Active NameNode
+    for node in namenodes:
+        if node.state == 'active':
+
+            fast_restart(node)
+
+            # Do not proceed unless this NameNode is a Standby
+            while node.get_state() != 'standby':
+                logging.warning('%s on %s is not a Standby. Retrying...', node.description, node.fqdn)
+                time.sleep(SAFEMODE_RETRY_DELAY)
+
+            for zkfc in zkfcs:
+                if zkfc.fqdn == node.fqdn:
+                    fast_restart(zkfc)
+
+            # Do not proceed until the NameNode exits SafeMode
+            while node.get_safemode():
+                logging.warning('%s on %s is in SafeMode. Retrying...', node.description, node.fqdn)
+                time.sleep(SAFEMODE_RETRY_DELAY)
+
+            # Do not proceed unless this NameNode is a Standby
+            while node.get_state() != 'standby':
+                logging.warning('%s on %s is not a Standby. Retrying...', node.description, node.fqdn)
+                time.sleep(SAFEMODE_RETRY_DELAY)
+
+    # Find the new Active NameNode
+    logging.debug('Searching for active NameNode...')
+    for node in namenodes:
+        if node.get_state() == 'active':
+            try:
+                livenodes = node.get_livenodes()
+            except Exception as exception:
+                logging.error('%s: There are no active NameNodes!', exception)
+                raise Exception('Exiting...')
+
+    # Restart the HDFS JournalNodes
+    for node in journalnodes:
+        fast_restart(node)
+
+    # Restart the HDFS Datanodes
+    for node in datanodes:
+        if node.name in livenodes:
+            fast_restart(node)
+        else:
+            logging.error('DataNode on %s is not in the LiveNodes list on the active NameNode', node.fqdn)
+            raise Exception('This is an unknown condition. Exiting...')
+
+    for node in nfs_gateways:
+        fast_restart(node)
+
+    # Refresh the client configs
+    for host in ambari.hosts:
+        logging.info('Refreshing %s client configs on %s...', service_name, host.fqdn)
+        HadoopService(host, service_name.upper()).refresh()
+
+
+
 def restart_yarn(ambari):
     """
     Function which acts as a manifest to restart YARN services
+        1. Restarts the Standby ResourceManager
+        2. Ensures that it is in Standby mode again
+        3. Restarts the Active ResourceManager
+        4. Ensures that it is in Standby mode after it starts
+        5. Restarts the NodeManagers one at a time
+        6. Restarts the App Timeline Server
+        7. Refreshes the YARN client configs
     """
     service_name = 'YARN'
+    logging.debug('==> Beginning %s restart...', service_name)
+
     resourcemanagers = []
     nodemanagers = []
     apptimelines = []
@@ -1712,7 +1895,7 @@ def restart_yarn(ambari):
     for node in apptimelines:
         fast_restart(node)
 
-   # Refresh the client configs
+    # Refresh the client configs
     for host in ambari.hosts:
         logging.info('Refreshing %s client configs on %s...', service_name, host.fqdn)
         HadoopService(host, service_name.upper()).refresh()
@@ -1721,8 +1904,19 @@ def restart_yarn(ambari):
 def restart_hbase(ambari):
     """
     Function which acts as a manifest to restart HBase services
+        1. Restarts the 1st Standby HBase Master
+        2. Ensures that it is in Standby mode again
+        3. Restarts the 2nd Standby HBase Master
+        4. Ensures that it is in Standby mode again
+        5. Restarts the Active HBase Master
+        6. Ensures that it is in Standby mode after it starts
+        7. Restarts the HBase RegionServers one at a time
+        8. Restarts the Phoenix Query Servers one at a time (if they exist)
+        9. Refreshes the HBase client configs
     """
     service_name = 'HBase'
+    logging.debug('==> Beginning %s restart...', service_name)
+
     hbasemasters = []
     regionservers = []
     queryservers = []
@@ -1798,8 +1992,12 @@ def restart_hbase(ambari):
 def restart_mr2(ambari):
     """
     Function which acts as a manifest to restart MapReduce2 services
+        1. Restarts the MapReduce2 Job History server
+        2. Refreshes the MapReduce2 client configs
     """
     service_name = 'MapReduce2'
+    logging.debug('==> Beginning %s restart...', service_name)
+
     jobhistories = []
 
     for host in ambari.hosts:
@@ -1818,8 +2016,10 @@ def restart_mr2(ambari):
 def restart_tez(ambari):
     """
     Function which acts as a manifest to restart Tez services
+        1. Refreshes the Tez client configs
     """
     service_name = 'Tez'
+    logging.debug('==> Beginning %s restart...', service_name)
 
     # Refresh the client configs
     for host in ambari.hosts:
@@ -1837,8 +2037,10 @@ def restart_hive(ambari):
 def restart_pig(ambari):
     """
     Function which acts as a manifest to restart Pig services
+        1. Refreshes the Pig client configs
     """
     service_name = 'Pig'
+    logging.debug('==> Beginning %s restart...', service_name)
 
     # Refresh the client configs
     for host in ambari.hosts:
@@ -1849,8 +2051,12 @@ def restart_pig(ambari):
 def restart_oozie(ambari):
     """
     Function which acts as a manifest to restart Oozie services
+        1. Restarts each Oozie server one at a time
+        2. Refreshes the Oozie client configs
     """
     service_name = 'Oozie'
+    logging.debug('==> Beginning %s restart...', service_name)
+
     oozies = []
 
     for host in ambari.hosts:
@@ -1869,8 +2075,15 @@ def restart_oozie(ambari):
 def restart_zookeeper(ambari):
     """
     Function which acts as a manifest to restart ZooKeeper services
+        1. Restarts each ZooKeeper follower one at a time
+        2. Ensures the the Restarted ZooKeeper is a follower after the restart
+        3. Restarts the ZooKeeper leader
+        4. Ensures the the Restarted ZooKeeper is a follower after the restart
+        5. Refreshes the ZooKeeper client configs
     """
     service_name = 'ZooKeeper'
+    logging.debug('==> Beginning %s restart...', service_name)
+
     zookeepers = []
 
     for host in ambari.hosts:
@@ -1910,11 +2123,52 @@ def restart_zookeeper(ambari):
         HadoopService(host, service_name.upper()).refresh()
 
 
+def fast_restart_zookeeper(ambari):
+    """
+    Experimental Fast ZooKeeper service restart
+    """
+    service_name = 'ZooKeeper'
+    logging.debug('==> Beginning FAST %s restart...', service_name)
+
+    zookeepers = []
+
+    for host in ambari.hosts:
+
+        if host.zookeeper:
+            zookeepers.append(ZooKeeper(host))
+
+    for node in zookeepers:
+        if node.state == 'follower':
+            fast_restart(node)
+
+            while node.get_state() != 'follower':
+                logging.warning('%s on %s is not a Follower. Retrying...', node.description, node.fqdn)
+                time.sleep(SAFEMODE_RETRY_DELAY)
+
+    for node in zookeepers:
+        if node.state == 'leader':
+            fast_restart(node)
+
+            while node.get_state() != 'follower':
+                logging.warning('%s on %s is not a Follower. Retrying...', node.description, node.fqdn)
+                time.sleep(SAFEMODE_RETRY_DELAY)
+
+    # Refresh the client configs
+    for host in ambari.hosts:
+        logging.info('Refreshing %s client configs on %s...', service_name, host.fqdn)
+        HadoopService(host, service_name.upper()).refresh()
+
+
 def restart_spark(ambari):
     """
     Function which acts as a manifest to restart Spark services
+        1. Restarts the Spark History server
+        2. Restarts each Spark Thrift server one at a time
+        3. Refreshes the Spark client configs
     """
     service_name = 'Spark'
+    logging.debug('==> Beginning %s restart...', service_name)
+
     sparkhistories = []
     sparkthrifts = []
 
@@ -1944,8 +2198,11 @@ def restart_spark(ambari):
 def restart_kafka(ambari):
     """
     Function which acts as a manifest to restart Kafka services
+        1. Restarts each Kafka Broker one at a time
     """
     service_name = 'Kafka'
+    logging.debug('==> Beginning %s restart...', service_name)
+
     kafkas = []
 
     for host in ambari.hosts:
